@@ -1,0 +1,52 @@
+{
+  "dataset": "StudentPerformanceFactors.csv",
+  "total_rows": 6607,
+  "train_rows": 5285,
+  "test_rows": 1322,
+  "numeric_features": [
+    "Hours_Studied",
+    "Attendance",
+    "Sleep_Hours",
+    "Previous_Scores",
+    "Tutoring_Sessions",
+    "Physical_Activity"
+  ],
+  "categorical_features": [
+    "Parental_Involvement",
+    "Access_to_Resources",
+    "Extracurricular_Activities",
+    "Motivation_Level",
+    "Internet_Access",
+    "Family_Income",
+    "Teacher_Quality",
+    "School_Type",
+    "Peer_Influence",
+    "Learning_Disabilities",
+    "Parental_Education_Level",
+    "Distance_from_Home",
+    "Gender"
+  ],
+  "selected_model": "RidgeRegression",
+  "metrics_comparison": {
+    "LinearRegression": {
+      "MAE": 0.4524,
+      "RMSE": 1.8044,
+      "R2": 0.7696
+    },
+    "RidgeRegression": {
+      "MAE": 0.4523,
+      "RMSE": 1.8044,
+      "R2": 0.7697
+    },
+    "RandomForest": {
+      "MAE": 1.0841,
+      "RMSE": 2.1657,
+      "R2": 0.6682
+    }
+  },
+  "selected_model_metrics": {
+    "MAE": 0.4523,
+    "RMSE": 1.8044,
+    "R2": 0.7697
+  }
+}

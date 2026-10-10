@@ -1,61 +1,167 @@
-# StudyAI: AI-Integrated Web Tool for Personalized Study Planning
+# StudyWise AI: An AI-Integrated Personalized and Adaptive Study Planning System
 
-A web platform that helps students plan their study time using **machine learning** (performance prediction, risk classification, priority scoring) and an **AI/LLM tutor with RAG** (explanations, study plans, and answers grounded in the student's own PDF notes).
-
-
----
-
-## Table of Contents
-
-- [Problem Definition](#problem-definition)
-- [Objectives](#objectives)
-- [Key Features](#key-features)
-- [Tech Stack](#tech-stack)
-- [Folder Structure](#folder-structure)
-- [Installation and Setup](#installation-and-setup)
-- [Usage](#usage)
-- [Testing](#testing)
-- [Documentation](#documentation)
-- [Limitations](#limitations)
-- [Contributing](#contributing)
+A full-stack, data-driven web application designed to help students optimize their academic performance through **machine learning-based score prediction**, **transparent academic risk assessment**, **deterministic study timetable scheduling**, **modular AI tutoring with grounded RAG over uploaded notes**, and **adaptive progress tracking**.
 
 ---
 
-## Problem Definition
+## 1. System Architecture
 
-Students often split study time evenly or by habit, without a data-driven view of which subjects are at risk, how much effort each needs, or how close the exams are. Generic study planners ignore a student's marks, attendance, quiz results, and available time, and generic chatbots do not use the student's own study material.
+StudyWise AI is built with strict architectural boundaries separating ML computation, deterministic constraint scheduling, and generative language tutoring:
 
-## Objectives
+```
+┌────────────────────────────────────────────────────────┐
+│                   React + Vite Frontend                │
+│    (Registration, Profile, Prediction, Planner, RAG,    │
+│                     Progress Dashboard)                │
+└───────────────────────────┬────────────────────────────┘
+                            │ REST / JSON
+┌───────────────────────────▼────────────────────────────┐
+│                    FastAPI Backend                     │
+│ ┌────────────────────────────────────────────────────┐ │
+│ │ Routes: /auth, /student, /predict, /study-plan,     │ │
+│ │         /ai, /performance                          │ │
+│ └────────────────────────────────────────────────────┘ │
+│ ┌──────────────────┐ ┌────────────────┐ ┌────────────┐ │
+│ │   ML Service     │ │   Scheduler    │ │  RAG & AI  │ │
+│ │ Ridge Regression │ │ Deterministic  │ │ TF-IDF /   │ │
+│ │ + Preprocessor   │ │ Priority Engine│ │ Citations  │ │
+│ └──────────────────┘ └────────────────┘ └────────────┘ │
+└─────────────┬───────────────────────────┬──────────────┘
+              │                           │
+┌─────────────▼──────────┐ ┌──────────────▼──────────────┐
+│  MongoDB Atlas Cluster │ │  ml/models/ (.joblib, .json)│
+│ (Users, Profiles, Plans│ │  Pretrained ML Pipeline     │
+│  Quizzes, Sessions)    │ │  & Evaluated Test Metrics   │
+└────────────────────────┘ └─────────────────────────────┘
+```
 
-1. Collect academic and study-habit data (marks, attendance, assignments, quizzes, study hours, difficulty, exam dates, preferences).
-2. Use ML to predict expected performance, classify subject risk (Low / Medium / High), and rank subject priority.
-3. Generate a personalized daily/weekly timetable and revision schedule that respects the student's availability and exam dates.
-4. Provide an AI tutor and a RAG-based Q&A feature over uploaded PDF notes, with citations.
-5. Track sessions, quizzes, and progress, and adapt the plan when new data arrives.
+- **ML vs. Scheduler vs. AI**:
+  - **ML Model**: Evaluates tabular academic & lifestyle features to predict expected exam scores.
+  - **Scheduler**: A deterministic engine that allocates study blocks (50m study / 10m break) based on subject difficulty, score deficits, and exam urgency.
+  - **RAG / AI Tutor**: Ingests student-uploaded PDF/text notes, chunks passages, retrieves relevant context using vector similarity, and synthesizes answers strictly grounded in the student's material with exact page citations.
 
-## Key Features
+---
 
-| Area | Description |
-|---|---|
-| **ML module** | Score prediction, risk classification, priority score, recommended study hours. The final algorithm is chosen only after comparing candidates against baselines on validation data. |
-| **Planner** | A rule-based scheduler enforces constraints (availability, exam dates, no overlaps). The LLM adds topic-wise tasks and explanations; invalid LLM output falls back to the rule-based plan. |
-| **AI tutor** | Explanations and study suggestions using the student's ML results as context. |
-| **RAG over notes** | PDF upload, chunking, embeddings, retrieval, and answers with page citations; replies "not found" when the notes do not cover the question. |
-| **Tracking** | Study sessions, topics completed, quiz scores, streaks, and a progress dashboard. |
-| **Adaptive plan** | Re-evaluates predictions and proposes a revised plan after new quizzes, marks, or missed sessions; the student approves changes. |
-| **Admin** | User management, ML model version management, configuration, and audit log. |
+## 2. Dataset & Preprocessing
 
-**ML vs. AI/LLM:** ML produces the numbers (predictions, risk, priority, hours). The LLM produces language (explanations, tutoring, Q&A) and never overrides ML outputs.
+- **Dataset**: `ml/data/StudentPerformanceFactors.csv` (6,607 rows, 20 columns).
+- **Target Variable**: `Exam_Score` (continuous numeric).
+- **Missing Value Handling**:
+  - `Teacher_Quality` (78 missing): Handled via categorical imputation (`most_frequent`).
+  - `Parental_Education_Level` (90 missing): Handled via categorical imputation (`most_frequent`).
+  - `Distance_from_Home` (67 missing): Handled via categorical imputation (`most_frequent`).
+- **Feature Pipeline**:
+  - Numeric columns (6): Imputed via `median` strategy (`SimpleImputer`).
+  - Categorical columns (13): Imputed via `most_frequent` + encoded via `OneHotEncoder(handle_unknown='ignore')`.
+  - Train/Test Split: 80% train (5,285 rows) and 20% test (1,322 rows) with reproducible random seed (`random_state=42`).
 
-## Tech Stack
+---
 
-| Layer | Technologies |
-|---|---|
-| Frontend | React.js, JavaScript, Tailwind CSS, Recharts / Chart.js |
-| Backend | Python, FastAPI |
-| ML | Pandas, NumPy, scikit-learn, XGBoost (only if justified), Matplotlib / Seaborn |
-| AI | LLM API, prompt engineering, embeddings, RAG, vector database |
-| Database | MongoDB / MongoDB Atlas |
-| Deployment | Vercel (frontend), Render / Railway (backend), MongoDB Atlas |
-| Tooling | Git, GitHub |
+## 3. Model Benchmark & Evaluation
 
+Models were trained strictly on training data and benchmarked on test data using MAE, RMSE, and R²:
+
+| Model | Test MAE | Test RMSE | Test R² | Status |
+|---|---|---|---|---|
+| **Ridge Regression** | **0.4523** | **1.8044** | **0.7697** | **Selected Best Pipeline** |
+| Linear Regression (Baseline) | 0.4524 | 1.8044 | 0.7696 | Candidate |
+| Random Forest Regressor | 1.0841 | 2.1657 | 0.6682 | Candidate |
+
+> **Selection Justification**: Linear and Ridge regression models significantly outperformed the Random Forest ensemble on this dataset due to strong linear correlations between leading factors (`Hours_Studied`, `Attendance`, `Previous_Scores`) and `Exam_Score`. Ridge Regression was selected as the final production model due to L2 regularization stability. The complete preprocessor and regressor are bundled in `ml/models/exam_score_model.joblib`.
+
+---
+
+## 4. Transparent Academic Risk Assessment (Phase E)
+
+Because the underlying dataset contains continuous scores rather than predefined risk labels, StudyWise AI does **not** fabricate an artificial classification target. Instead, it computes a **transparent, rule-based risk indicator** using observable leading indicators available *before* final examinations:
+- **Attendance**: High risk if `< 65%`, medium risk if `< 75%`.
+- **Study Hours**: High risk if `< 10 hrs/week`, medium risk if `< 16 hrs/week`.
+- **Prior Academic Record**: High risk if `< 55%`, medium risk if `< 70%`.
+- **Predicted Exam Score**: Evaluated against the standard pass threshold (`< 60%`).
+
+This prevents data leakage from final exam outcomes while delivering clear, actionable risk levels (**Low Risk**, **Medium Risk**, **High Risk**) with prescriptive intervention plans.
+
+---
+
+## 5. Grounded AI Tutor & Notes RAG (Phase F)
+
+1. **Document Ingestion**: Accepts PDF or plain-text lecture notes with validation (format check, max 20MB).
+2. **Text Extraction & Chunking**: Uses `pypdf` to extract text page-by-page and segments into overlapping windows (150 words, 30-word overlap) preserving source page numbers.
+3. **Similarity Retrieval**: Uses TF-IDF cosine similarity to rank passages against student queries.
+4. **Knowledge Boundary Enforcement**: When similarity fails to meet the relevance threshold, the tutor explicitly replies: *"This information is not available in your uploaded study notes."*
+5. **Modular Architecture**: Works 100% offline using grounded passage extraction and citations. If a `GEMINI_API_KEY` is provided in the environment, it uses generative conversational synthesis without compromising offline fallback.
+
+---
+
+## 6. Installation & Setup
+
+### Prerequisites
+- Node.js (v18+)
+- Python (v3.10+)
+- MongoDB Atlas account or local MongoDB instance
+
+### Backend Setup
+1. Open terminal in the backend directory:
+   ```bash
+   cd backend
+   ```
+2. Activate existing virtual environment:
+   ```powershell
+   # Windows PowerShell
+   .venv\Scripts\Activate.ps1
+   ```
+3. Copy environment template and configure your credentials:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env`:
+   ```ini
+   MONGODB_URI=your_mongodb_connection_string
+   DATABASE_NAME=studyai
+   GEMINI_API_KEY=optional_gemini_api_key
+   ```
+4. Train the ML model pipeline (if not already generated):
+   ```bash
+   python ../ml/src/train_model.py
+   ```
+5. Launch the FastAPI server:
+   ```bash
+   uvicorn app.main:app --reload --port 8000
+   ```
+   Interactive Swagger documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+### Frontend Setup
+1. In a separate terminal, open the frontend directory:
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+2. Open your browser at [http://localhost:5173](http://localhost:5173).
+
+---
+
+## 7. Testing
+
+Run backend test suite using Python's built-in `unittest` runner:
+```bash
+cd backend
+python -m unittest tests/test_studyai.py
+```
+
+Test coverage includes:
+- ML pipeline loading and prediction bounds
+- Transparent risk assessment logic
+- Deterministic study scheduler time calculations and priority shares
+- RAG document chunking, passage retrieval, and grounded citations
+- Out-of-scope query rejection
+- API health and model status endpoints
+
+---
+
+## 8. Deployment Guidelines
+
+- **Frontend**: Deployable to Vercel, Netlify, or AWS S3 + CloudFront. Build with `npm run build` (outputs to `dist/`).
+- **Backend**: Deployable to Render, Railway, or AWS EC2 using `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+- **Database**: MongoDB Atlas cloud cluster with IP allowlisting enabled.
+- **Environment Security**: Keep `MONGODB_URI` and `GEMINI_API_KEY` in environment variables; never commit `.env` files to source control.
