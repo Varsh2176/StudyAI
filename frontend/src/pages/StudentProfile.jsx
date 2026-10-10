@@ -238,11 +238,14 @@ function StudentProfile() {
         </form>
 
         {message && (
-          <div style={{ marginTop: "1.75rem", display: "flex", gap: "1rem", justifyContent: "center" }}>
+          <div style={{ marginTop: "1.75rem", display: "flex", gap: "1rem", justifyContent: "center", flexWrap: "wrap" }}>
+            <Link to="/dashboard" className="btn btn-primary">
+              Open Dashboard →
+            </Link>
             <Link to="/predict" className="btn btn-secondary">
               Predict Exam Score →
             </Link>
-            <Link to="/planner" className="btn btn-primary">
+            <Link to="/planner" className="btn btn-secondary">
               Generate Study Plan →
             </Link>
           </div>

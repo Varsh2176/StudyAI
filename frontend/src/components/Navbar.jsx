@@ -23,7 +23,10 @@ function Navbar() {
           AI Tutor & Notes
         </NavLink>
         <NavLink to="/dashboard" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Progress Dashboard
+          Dashboard
+        </NavLink>
+        <NavLink to="/progress" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
+          Progress
         </NavLink>
       </div>
     </nav>

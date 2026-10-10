@@ -6,6 +6,7 @@ import PredictScore from "./pages/PredictScore";
 import StudyPlanner from "./pages/StudyPlanner";
 import AiTutor from "./pages/AiTutor";
 import Dashboard from "./pages/Dashboard";
+import ProgressTracking from "./pages/ProgressTracking";
 import "./styles.css";
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
           <Route path="/planner" element={<StudyPlanner />} />
           <Route path="/tutor" element={<AiTutor />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/progress" element={<ProgressTracking />} />
         </Routes>
       </div>
     </Router>
