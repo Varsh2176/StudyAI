@@ -12,24 +12,85 @@ from app.database.mongodb import study_plans_collection
 router = APIRouter(prefix="/study-plan", tags=["Study Plan"])
 
 
+@router.post("", response_model=StudyPlanResponse)
 @router.post("/generate", response_model=StudyPlanResponse)
 def generate_plan_endpoint(request: StudyPlanGenerateRequest):
     """
-    Deterministically computes a personalized daily study timetable and weekly schedule
-    bounded by student available hours, M10 recommended hours, subject difficulty, and exam urgency.
+    Integrates M9 Academic Risk Classification, M10 Study-Hour Recommendations,
+    and M11 Deterministic Study Scheduling into a unified Study Plan API (Milestone 12).
+    Generates a complete study plan containing recommended daily study hours,
+    subject-wise allocations, and the scheduled study timetable.
     """
     try:
-        from app.database.mongodb import students_collection
+        from app.database.mongodb import students_collection, predictions_collection
+        from app.services.risk_service import evaluate_academic_risk
+
+        # Validate subjects
+        if not request.subjects:
+            raise ValueError("At least one subject is required to generate a study plan.")
+        for s in request.subjects:
+            if not s.name or not s.name.strip():
+                raise ValueError("Subject name cannot be empty.")
 
         # Check student profile if email is provided and daily_available_hours not explicitly set
         avail_hours = request.daily_available_hours
-        if request.email and avail_hours is None and students_collection is not None:
+        profile = None
+        if request.email and students_collection is not None:
             try:
-                prof = students_collection.find_one({"email": request.email})
-                if prof and prof.get("study_hours"):
-                    avail_hours = float(prof["study_hours"])
+                profile = students_collection.find_one({"email": request.email})
+                if profile and profile.get("study_hours") and avail_hours is None:
+                    avail_hours = float(profile["study_hours"])
             except Exception as pe:
-                print(f"Non-fatal error retrieving student profile in scheduler: {pe}")
+                print(f"Non-fatal error retrieving student profile in study plan: {pe}")
+
+        # Check for prior prediction record in MongoDB if risk category not provided
+        recent_pred = None
+        risk_cat = request.risk_category
+        risk_info = None
+
+        if not risk_cat and request.email and predictions_collection is not None:
+            try:
+                recent_pred = predictions_collection.find_one(
+                    {"email": request.email},
+                    sort=[("created_at", -1)]
+                )
+            except Exception as pre_err:
+                print(f"Non-fatal error retrieving recent prediction: {pre_err}")
+
+        # Dynamically derive risk classification if not provided explicitly
+        if not risk_cat:
+            if recent_pred and "risk_assessment" in recent_pred:
+                risk_info = recent_pred["risk_assessment"]
+                risk_cat = risk_info.get("risk_category")
+            else:
+                att = request.attendance
+                prev = request.previous_scores
+                pred = request.predicted_exam_score
+
+                if profile:
+                    if att is None and profile.get("attendance") is not None:
+                        att = float(profile["attendance"])
+                    if prev is None and profile.get("previous_cgpa") is not None:
+                        cgpa = float(profile["previous_cgpa"])
+                        prev = cgpa * 10.0 if cgpa <= 10.0 else cgpa
+
+                if prev is None and request.subjects:
+                    scores = [s.current_score for s in request.subjects if s.current_score is not None]
+                    if scores:
+                        prev = sum(scores) / len(scores)
+
+                if att is not None or prev is not None or pred is not None:
+                    effective_avail = (
+                        avail_hours if avail_hours is not None
+                        else (request.daily_study_hours if request.daily_study_hours is not None else 4.0)
+                    )
+                    risk_info = evaluate_academic_risk(
+                        attendance=att if att is not None else 80.0,
+                        hours_studied=effective_avail * 7.0,
+                        previous_scores=prev if prev is not None else 75.0,
+                        predicted_score=pred if pred is not None else 70.0
+                    )
+                    risk_cat = risk_info.get("risk_category")
 
         subjects_data = [s.model_dump() for s in request.subjects]
         plan = generate_study_plan(
@@ -38,9 +99,10 @@ def generate_plan_endpoint(request: StudyPlanGenerateRequest):
             preferred_start_time=request.preferred_start_time,
             days_to_plan=request.days_to_plan,
             daily_available_hours=avail_hours,
-            risk_category=request.risk_category,
+            risk_category=risk_cat,
             max_daily_limit=request.max_daily_limit,
-            plan_date=request.plan_date
+            plan_date=request.plan_date,
+            risk_details=risk_info
         )
 
         # If student email is provided, save or update their active plan in MongoDB

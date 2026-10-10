@@ -729,6 +729,179 @@ class TestStudyPlanner(unittest.TestCase):
         self.assertEqual(res_tt["total_scheduled_study_hours"], res_gen["total_scheduled_study_hours"])
 
 
+class TestStudyPlanAPI(unittest.TestCase):
+    """
+    Comprehensive tests for Milestone 12 — Study-Plan API:
+    - Integration of M9 risk classification, M10 study-hour recommendations, and M11 deterministic scheduler
+    - Successful plan generation with full schema compliance
+    - Dynamic risk derivation when risk_category is omitted
+    - Validation errors for invalid inputs and out-of-range parameters
+    - Scheduling limits and burnout guardrails
+    - Deterministic timetable reproducibility
+    """
+
+    def test_study_plan_generation_success(self):
+        exam_date = (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d")
+        req = StudyPlanGenerateRequest(
+            email="learner@example.edu",
+            daily_study_hours=4.0,
+            daily_available_hours=5.0,
+            preferred_start_time="09:00",
+            days_to_plan=5,
+            subjects=[
+                PlanSubject(name="Advanced Algorithms", difficulty="High", current_score=55.0, target_score=85.0, exam_date=exam_date),
+                PlanSubject(name="Operating Systems", difficulty="Medium", current_score=70.0, target_score=88.0),
+                PlanSubject(name="Database Engineering", difficulty="Low", current_score=80.0, target_score=90.0)
+            ],
+            risk_category="Moderate Risk",
+            max_daily_limit=8.0
+        )
+        plan = generate_plan_endpoint(req)
+
+        # Validate with Pydantic response schema
+        validated_plan = StudyPlanResponse(**plan)
+        self.assertIsNotNone(validated_plan)
+
+        # Verify essential fields
+        self.assertEqual(plan["daily_available_hours"], 5.0)
+        self.assertIn("m10_recommended_daily_hours", plan)
+        self.assertIn("m10_recommended_weekly_hours", plan)
+        self.assertEqual(plan["risk_category_applied"], "Moderate Risk")
+        self.assertIsNotNone(plan["m10_recommendation"])
+        self.assertEqual(len(plan["subject_allocations"]), 3)
+        self.assertGreater(len(plan["timetable"]), 0)
+        self.assertEqual(plan["days_planned"], 5)
+        self.assertIn("weekly_schedule", plan)
+        self.assertIn("summary", plan)
+        self.assertIn("notes", plan)
+        self.assertIn("disclaimer", plan)
+
+        # Verify timetable slot structure
+        first_slot = plan["timetable"][0]
+        self.assertEqual(first_slot["start_time"], "09:00")
+        self.assertEqual(first_slot["duration_minutes"], 50)
+        self.assertEqual(first_slot["break_duration_minutes"], 10)
+        self.assertIn("recommended_focus", first_slot)
+        self.assertFalse(first_slot["completed"])
+
+    def test_study_plan_dynamic_risk_high(self):
+        # When risk_category is omitted, low attendance/scores trigger M9 High Risk
+        req = StudyPlanGenerateRequest(
+            daily_study_hours=4.0,
+            daily_available_hours=4.0,
+            preferred_start_time="10:00",
+            days_to_plan=3,
+            subjects=[
+                PlanSubject(name="Compiler Design", difficulty="High", current_score=40.0, target_score=75.0)
+            ],
+            risk_category=None,
+            attendance=55.0,
+            previous_scores=45.0,
+            predicted_exam_score=48.0
+        )
+        plan = generate_plan_endpoint(req)
+
+        self.assertEqual(plan["risk_category_applied"], "High Risk")
+        self.assertIsNotNone(plan["risk_assessment_details"])
+        self.assertIn("High Risk", plan["risk_assessment_details"]["concise_explanation"])
+        # High Risk applies +30% intensity multiplier in M10 recommendation
+        m10_rec = plan["m10_recommendation"]
+        self.assertEqual(m10_rec["risk_category_applied"], "High Risk")
+
+    def test_study_plan_dynamic_risk_low(self):
+        # When risk_category is omitted, high attendance/scores trigger M9 Low Risk
+        req = StudyPlanGenerateRequest(
+            daily_study_hours=3.0,
+            daily_available_hours=3.0,
+            days_to_plan=2,
+            subjects=[
+                PlanSubject(name="Software Testing", difficulty="Low", current_score=85.0, target_score=95.0)
+            ],
+            risk_category=None,
+            attendance=95.0,
+            previous_scores=90.0,
+            predicted_exam_score=88.0
+        )
+        plan = generate_plan_endpoint(req)
+
+        self.assertEqual(plan["risk_category_applied"], "Low Risk")
+        self.assertIsNotNone(plan["risk_assessment_details"])
+        self.assertEqual(plan["risk_assessment_details"]["risk_score"], 0)
+
+    def test_study_plan_validation_errors(self):
+        # 1. Empty subjects list fails validation
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(subjects=[])
+
+        # 2. Blank subject name fails validation
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(subjects=[PlanSubject(name="")])
+
+        # 3. Whitespace-only subject name raises 400
+        req_blank = StudyPlanGenerateRequest(
+            subjects=[PlanSubject(name="   ", difficulty="Medium")]
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            generate_plan_endpoint(req_blank)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+        # 4. Out-of-range days_to_plan
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(
+                days_to_plan=35,
+                subjects=[PlanSubject(name="AI", difficulty="Medium")]
+            )
+
+        # 5. Invalid daily_study_hours (< 0.5 or > 16.0)
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(
+                daily_study_hours=0.1,
+                subjects=[PlanSubject(name="AI", difficulty="Medium")]
+            )
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(
+                daily_study_hours=20.0,
+                subjects=[PlanSubject(name="AI", difficulty="Medium")]
+            )
+
+    def test_study_plan_scheduling_burnout_limits(self):
+        # Requesting 12 hours with a strict 6-hour daily limit
+        req = StudyPlanGenerateRequest(
+            daily_study_hours=12.0,
+            daily_available_hours=12.0,
+            max_daily_limit=6.0,
+            days_to_plan=2,
+            subjects=[
+                PlanSubject(name="Computer Networks", difficulty="High", current_score=60.0, target_score=85.0)
+            ]
+        )
+        plan = generate_plan_endpoint(req)
+
+        self.assertTrue(plan["burnout_guardrail_applied"])
+        self.assertLessEqual(plan["total_scheduled_study_hours"], 6.0)
+        self.assertLessEqual(plan["daily_study_hours"], 6.0)
+
+    def test_study_plan_deterministic_reproducibility(self):
+        # Identical inputs must generate exactly identical timetables and allocations
+        req = StudyPlanGenerateRequest(
+            daily_study_hours=4.0,
+            preferred_start_time="09:00",
+            days_to_plan=3,
+            subjects=[
+                PlanSubject(name="Data Science", difficulty="High", current_score=50.0, target_score=80.0),
+                PlanSubject(name="Ethics in AI", difficulty="Low", current_score=80.0, target_score=90.0)
+            ],
+            risk_category="Low Risk"
+        )
+        plan1 = generate_plan_endpoint(req)
+        plan2 = generate_plan_endpoint(req)
+
+        self.assertEqual(plan1["timetable"], plan2["timetable"])
+        self.assertEqual(plan1["subject_allocations"], plan2["subject_allocations"])
+        self.assertEqual(plan1["total_scheduled_study_minutes"], plan2["total_scheduled_study_minutes"])
+        self.assertEqual(plan1["m10_recommendation"], plan2["m10_recommendation"])
+
+
 class TestRAGAndAITutor(unittest.TestCase):
     def test_chunking_and_retrieval(self):
         text = b"Machine learning models include supervised and unsupervised algorithms. Supervised algorithms learn from labeled data."

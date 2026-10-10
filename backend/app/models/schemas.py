@@ -74,6 +74,15 @@ class StudyPlanGenerateRequest(BaseModel):
         default=8.0, ge=2.0, le=12.0, description="Maximum daily study limit to prevent burnout"
     )
     plan_date: Optional[str] = Field(default=None, description="Anchor date for plan generation (YYYY-MM-DD)")
+    attendance: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0, description="Student attendance percentage for dynamic risk assessment"
+    )
+    previous_scores: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0, description="Student previous score percentage for dynamic risk assessment"
+    )
+    predicted_exam_score: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0, description="ML predicted exam score for dynamic risk assessment"
+    )
 
 
 class TimetableSlot(BaseModel):
@@ -106,9 +115,13 @@ class StudyPlanResponse(BaseModel):
     daily_study_hours: float
     daily_available_hours: float
     m10_recommended_daily_hours: float
+    m10_recommended_weekly_hours: Optional[float] = None
     total_scheduled_study_minutes: int
     total_scheduled_study_hours: float
     total_break_minutes: int
+    risk_category_applied: Optional[str] = "Low Risk"
+    risk_assessment_details: Optional[Dict[str, Any]] = None
+    m10_recommendation: Optional[Dict[str, Any]] = None
     burnout_guardrail_applied: bool
     days_planned: int
     subjects_weighted: List[Dict[str, Any]]
@@ -118,6 +131,7 @@ class StudyPlanResponse(BaseModel):
     subject_allocations: List[SubjectAllocationSummary]
     summary: str
     notes: str
+    disclaimer: Optional[str] = None
 
 
 # Progress & Quiz Schemas (Phase G)

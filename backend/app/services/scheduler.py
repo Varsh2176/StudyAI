@@ -133,7 +133,8 @@ def generate_study_plan(
     max_daily_limit: Optional[float] = 8.0,
     plan_date: Optional[str] = None,
     slot_duration_minutes: int = 50,
-    break_duration_minutes: int = 10
+    break_duration_minutes: int = 10,
+    risk_details: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Generates deterministic daily and weekly study timetables bounded by
@@ -184,7 +185,8 @@ def generate_study_plan(
         daily_available_hours=min(available, daily_cap),
         subjects=subjects,
         risk_category=risk_category,
-        max_daily_limit=daily_cap
+        max_daily_limit=daily_cap,
+        risk_details=risk_details
     )
     m10_recommended_daily = m10_rec["recommended_daily_hours"]
 
@@ -368,9 +370,13 @@ def generate_study_plan(
         "daily_study_hours": effective_daily_hours,
         "daily_available_hours": available,
         "m10_recommended_daily_hours": m10_recommended_daily,
+        "m10_recommended_weekly_hours": m10_rec.get("recommended_weekly_hours"),
         "total_scheduled_study_minutes": total_scheduled_study_minutes,
         "total_scheduled_study_hours": total_scheduled_study_hours,
         "total_break_minutes": total_break_minutes,
+        "risk_category_applied": m10_rec.get("risk_category_applied", risk_category or "Low Risk"),
+        "risk_assessment_details": risk_details or m10_rec.get("risk_assessment_details"),
+        "m10_recommendation": m10_rec,
         "burnout_guardrail_applied": burnout_applied,
         "days_planned": days_to_plan,
         "subjects_weighted": weighted_subjects,
@@ -383,6 +389,10 @@ def generate_study_plan(
             "Timetable generated deterministically using Pomodoro cycles (50m study / 10m break). "
             "Subjects are prioritized by difficulty, target deficit, and exam urgency. "
             "Scheduled study time is strictly bounded by M10 recommended hours and cognitive limits."
+        ),
+        "disclaimer": m10_rec.get(
+            "disclaimer",
+            "This study plan is an advisory schedule. Study hours are strictly bounded to prevent burnout."
         )
     }
 
