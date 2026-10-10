@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any, Literal
 
 
@@ -153,12 +153,58 @@ class QuizScoreLog(BaseModel):
     date: Optional[str] = None
 
 
-# AI Notes & Q&A Schemas (Phase F)
+# AI Notes & Q&A Schemas (Phase F / M15–M16 RAG path)
 class AskTutorRequest(BaseModel):
     email: Optional[str] = None
     question: str
     subject: Optional[str] = None
     note_id: Optional[str] = None
+
+
+# M14 — General AI Tutor (non-RAG conversational assistant)
+class TutorChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class TutorChatRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000, description="Academic question for the tutor")
+    email: Optional[str] = Field(default=None, description="Optional student email for profile context")
+    subject: Optional[str] = Field(default=None, max_length=120, description="Optional subject/topic focus")
+    conversation_history: List[TutorChatMessage] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Prior turns in the active UI session (not server-persisted)",
+    )
+    include_profile_context: bool = Field(
+        default=True,
+        description="When email is provided, optionally include basic academic profile fields",
+    )
+
+    @field_validator("question")
+    @classmethod
+    def validate_question_not_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Question cannot be empty.")
+        return cleaned
+
+    @field_validator("subject")
+    @classmethod
+    def normalize_subject(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class TutorChatResponse(BaseModel):
+    answer: str
+    provider: str
+    model_used: str
+    configured: bool = True
+    profile_context_used: bool = False
+    disclaimer: str
 
 
 # Study-Hour Recommendation Schemas (Milestone 10)

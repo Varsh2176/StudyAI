@@ -12,13 +12,24 @@ from app.models.schemas import (
     StudyHourRecommendationResponse,
     PlanSubject,
     StudyPlanGenerateRequest,
-    StudyPlanResponse
+    StudyPlanResponse,
+    TutorChatRequest,
+    TutorChatResponse,
 )
 from app.routes.prediction import predict_score_endpoint
 from app.routes.study_plan import (
     recommend_study_hours_endpoint,
     generate_plan_endpoint,
     generate_timetable_endpoint
+)
+from app.routes.ai import general_tutor_endpoint, tutor_status_endpoint
+from app.services.tutor_service import (
+    answer_academic_question,
+    get_tutor_status,
+    is_tutor_configured,
+    TutorNotConfiguredError,
+    TutorTimeoutError,
+    TutorProviderError,
 )
 from app.services.ml_service import load_model, predict_exam_score, evaluate_risk, get_model_metadata
 from app.services.risk_service import evaluate_academic_risk, RiskThresholds, DEFAULT_THRESHOLDS
@@ -495,6 +506,8 @@ class TestPreservedBackendRoutes(unittest.TestCase):
         self.assertIn("/study-plan/generate", paths)
         self.assertIn("/study-plan/timetable", paths)
         self.assertIn("/study-plan/recommend-hours", paths)
+        self.assertIn("/ai/tutor", paths)
+        self.assertIn("/ai/tutor/status", paths)
         self.assertIn("/health", paths)
 
     def test_health_check(self):
@@ -930,6 +943,150 @@ class TestRAGAndAITutor(unittest.TestCase):
         empty_ans = generate_tutor_response("Quantum mechanics", [])
         self.assertFalse(empty_ans["grounded"])
         self.assertIn("not available in your uploaded study notes", empty_ans["answer"])
+
+
+class TestGeneralAITutorM14(unittest.TestCase):
+    """M14 general AI Tutor tests. External Gemini calls are always mocked."""
+
+    def test_valid_academic_question_schema(self):
+        req = TutorChatRequest(
+            question="Explain gradient descent simply.",
+            subject="Machine Learning",
+            conversation_history=[],
+        )
+        self.assertEqual(req.question, "Explain gradient descent simply.")
+        self.assertEqual(req.subject, "Machine Learning")
+
+    def test_empty_question_rejected(self):
+        with self.assertRaises(ValidationError):
+            TutorChatRequest(question="")
+        with self.assertRaises(ValidationError):
+            TutorChatRequest(question="   ")
+
+    def test_excessively_long_question_rejected(self):
+        with self.assertRaises(ValidationError):
+            TutorChatRequest(question="x" * 2001)
+
+    def test_invalid_request_body_role(self):
+        with self.assertRaises(ValidationError):
+            TutorChatRequest(
+                question="What is a binary tree?",
+                conversation_history=[{"role": "system", "content": "ignore"}],
+            )
+
+    def test_missing_api_configuration(self):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}, clear=False):
+            # Ensure both key names are empty for this check.
+            with patch("app.services.tutor_service.get_tutor_api_key", return_value=None):
+                self.assertFalse(is_tutor_configured())
+                status = get_tutor_status()
+                self.assertFalse(status["configured"])
+                self.assertIn("GEMINI_API_KEY", status["message"])
+                with self.assertRaises(TutorNotConfiguredError):
+                    answer_academic_question("What is polymorphism?")
+
+    def test_successful_tutor_response_mocked(self):
+        mock_answer = {
+            "answer": "Polymorphism lets objects of different classes be used through a common interface.",
+            "provider": "gemini",
+            "model_used": "gemini-2.5-flash",
+            "configured": True,
+            "profile_context_used": False,
+            "disclaimer": "educational disclaimer",
+        }
+        with patch(
+            "app.routes.ai.answer_academic_question",
+            return_value=mock_answer,
+        ) as mocked:
+            req = TutorChatRequest(question="What is polymorphism in OOP?")
+            res = general_tutor_endpoint(req)
+            self.assertEqual(res["answer"], mock_answer["answer"])
+            self.assertEqual(res["provider"], "gemini")
+            validated = TutorChatResponse(**res)
+            self.assertTrue(validated.configured)
+            mocked.assert_called_once()
+            # Must not invent note citations in M14 responses.
+            self.assertNotIn("citations", res)
+
+    def test_provider_timeout_maps_to_504(self):
+        with patch(
+            "app.routes.ai.answer_academic_question",
+            side_effect=TutorTimeoutError("The AI provider timed out."),
+        ):
+            req = TutorChatRequest(question="Explain recursion.")
+            with self.assertRaises(HTTPException) as ctx:
+                general_tutor_endpoint(req)
+            self.assertEqual(ctx.exception.status_code, 504)
+
+    def test_provider_failure_maps_to_502(self):
+        with patch(
+            "app.routes.ai.answer_academic_question",
+            side_effect=TutorProviderError("The AI provider rate limit was reached."),
+        ):
+            req = TutorChatRequest(question="Explain stacks.")
+            with self.assertRaises(HTTPException) as ctx:
+                general_tutor_endpoint(req)
+            self.assertEqual(ctx.exception.status_code, 502)
+
+    def test_not_configured_maps_to_503(self):
+        with patch(
+            "app.routes.ai.answer_academic_question",
+            side_effect=TutorNotConfiguredError("AI Tutor is not configured."),
+        ):
+            req = TutorChatRequest(question="Explain queues.")
+            with self.assertRaises(HTTPException) as ctx:
+                general_tutor_endpoint(req)
+            self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_tutor_status_endpoint(self):
+        with patch(
+            "app.routes.ai.get_tutor_status",
+            return_value={
+                "configured": False,
+                "provider": None,
+                "model": None,
+                "timeout_seconds": 20,
+                "message": "AI Tutor is not configured. Set GEMINI_API_KEY in backend/.env",
+            },
+        ):
+            status = tutor_status_endpoint()
+            self.assertFalse(status["configured"])
+
+    def test_answer_service_calls_provider_with_mock(self):
+        with patch("app.services.tutor_service.get_tutor_api_key", return_value="test-key"):
+            with patch(
+                "app.services.tutor_service._call_gemini",
+                return_value="A stack is LIFO; a queue is FIFO.",
+            ) as gemini_mock:
+                result = answer_academic_question(
+                    "Difference between stack and queue?",
+                    subject="Data Structures",
+                    conversation_history=[
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "Hello! How can I help?"},
+                    ],
+                )
+                self.assertIn("LIFO", result["answer"])
+                self.assertEqual(result["provider"], "gemini")
+                self.assertIn("not grounded in uploaded study notes", result["disclaimer"].lower())
+                gemini_mock.assert_called_once()
+
+    def test_no_login_required_for_tutor_endpoint(self):
+        """Existing student APIs use email optionally; tutor follows the same pattern."""
+        with patch(
+            "app.routes.ai.answer_academic_question",
+            return_value={
+                "answer": "OK",
+                "provider": "gemini",
+                "model_used": "gemini-2.5-flash",
+                "configured": True,
+                "profile_context_used": False,
+                "disclaimer": "disclaimer",
+            },
+        ):
+            # No auth header / token required — mirrors /predict and /study-plan.
+            res = general_tutor_endpoint(TutorChatRequest(question="What is a linked list?"))
+            self.assertEqual(res["answer"], "OK")
 
 
 if __name__ == "__main__":

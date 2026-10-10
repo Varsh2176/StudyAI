@@ -1,120 +1,125 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import API from "../services/api";
 
+const MAX_QUESTION_LENGTH = 2000;
+const TUTOR_TIMEOUT_MS = 25000;
+
 function AiTutor() {
-  const [email, setEmail] = useState("");
-  const [file, setFile] = useState(null);
-  const [subject, setSubject] = useState("Computer Science");
-  const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState("");
-  const [uploadError, setUploadError] = useState("");
-  const [notes, setNotes] = useState([]);
-
-  // Chat state
+  const [email, setEmail] = useState(() => localStorage.getItem("student_email") || "");
+  const [subject, setSubject] = useState("");
   const [question, setQuestion] = useState("");
-  const [selectedNoteId, setSelectedNoteId] = useState("");
-  const [chatHistory, setChatHistory] = useState([]);
+  const [messages, setMessages] = useState([]);
   const [asking, setAsking] = useState(false);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [lastFailedQuestion, setLastFailedQuestion] = useState(null);
+  const chatEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
-  useEffect(() => {
-    const savedEmail = localStorage.getItem("student_email") || "student@example.edu";
-    setEmail(savedEmail);
-    fetchNotes(savedEmail);
+  const scrollToBottom = useCallback(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
   }, []);
 
-  const fetchNotes = async (studentEmail) => {
+  const loadStatus = useCallback(async () => {
+    setStatusLoading(true);
     try {
-      const res = await API.get(`/ai/notes/${studentEmail}`);
-      if (res.data?.notes) {
-        setNotes(res.data.notes);
-        if (res.data.notes.length > 0 && !selectedNoteId) {
-          setSelectedNoteId(res.data.notes[0].note_id);
-        }
-      }
-    } catch (err) {
-      console.log("Error loading notes:", err);
+      const res = await API.get("/ai/tutor/status", { timeout: 8000 });
+      setStatus(res.data);
+    } catch {
+      setStatus({
+        configured: false,
+        message: "Could not reach the AI Tutor status endpoint. Is the backend running on port 8000?"
+      });
+    } finally {
+      setStatusLoading(false);
     }
-  };
+  }, []);
 
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadStatus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadStatus]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, asking, scrollToBottom]);
+
+  const buildHistoryPayload = (currentMessages) =>
+    currentMessages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .filter((m) => !m.isError)
+      .slice(-20)
+      .map((m) => ({ role: m.role, content: m.text }));
+
+  const askTutor = async (rawQuestion, priorMessages) => {
+    const trimmed = (rawQuestion || "").trim();
+    if (!trimmed) {
+      setError("Please enter an academic question before sending.");
+      return;
     }
-  };
-
-  const handleUpload = async (e) => {
-    e.preventDefault();
-    if (!file) {
-      setUploadError("Please select a PDF or TXT file to upload.");
+    if (trimmed.length > MAX_QUESTION_LENGTH) {
+      setError(`Question is too long (max ${MAX_QUESTION_LENGTH} characters).`);
       return;
     }
 
-    setUploadError("");
-    setUploadMsg("");
-    setUploading(true);
-
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("email", email);
-    formData.append("subject", subject);
-
-    try {
-      const res = await API.post("/ai/notes/upload", formData, {
-        headers: { "Content-Type": "multipart/form-data" }
-      });
-      setUploadMsg(`Successfully processed ${res.data.filename} (${res.data.total_pages} pages, ${res.data.total_chunks} chunks).`);
-      setFile(null);
-      fetchNotes(email);
-      if (res.data.note_id) {
-        setSelectedNoteId(res.data.note_id);
-      }
-    } catch (err) {
-      console.error(err);
-      setUploadError(err.response?.data?.detail || "Failed to upload note.");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleAsk = async (e) => {
-    e.preventDefault();
-    if (!question.trim()) return;
-
-    const currentQuery = question.trim();
-    setQuestion("");
+    setError("");
+    setLastFailedQuestion(null);
     setAsking(true);
 
-    // Append student question immediately
-    setChatHistory((prev) => [
-      ...prev,
-      { role: "user", text: currentQuery }
-    ]);
+    const historyForRequest = buildHistoryPayload(priorMessages);
+    const nextMessages = [...priorMessages, { role: "user", text: trimmed }];
+    setMessages(nextMessages);
+    setQuestion("");
 
     try {
-      const res = await API.post("/ai/ask", {
-        email: email,
-        question: currentQuery,
-        note_id: selectedNoteId || undefined,
-        subject: subject
-      });
+      const res = await API.post(
+        "/ai/tutor",
+        {
+          question: trimmed,
+          email: email || undefined,
+          subject: subject.trim() || undefined,
+          conversation_history: historyForRequest,
+          include_profile_context: Boolean(email)
+        },
+        { timeout: TUTOR_TIMEOUT_MS }
+      );
 
-      setChatHistory((prev) => [
+      setMessages((prev) => [
         ...prev,
         {
-          role: "ai",
+          role: "assistant",
           text: res.data.answer,
-          citations: res.data.citations || [],
-          grounded: res.data.grounded,
-          source: res.data.source
+          provider: res.data.provider,
+          model_used: res.data.model_used,
+          disclaimer: res.data.disclaimer,
+          profile_context_used: res.data.profile_context_used
         }
       ]);
     } catch (err) {
-      setChatHistory((prev) => [
+      const detail =
+        err.code === "ECONNABORTED"
+          ? "The tutor request timed out. Please try again with a shorter question."
+          : err.response?.data?.detail ||
+            err.message ||
+            "Failed to reach the AI Tutor. Ensure the backend is running.";
+
+      const messageText = Array.isArray(detail)
+        ? detail.map((d) => d.msg || JSON.stringify(d)).join(" ")
+        : String(detail);
+
+      setError(messageText);
+      setLastFailedQuestion(trimmed);
+      setMessages((prev) => [
         ...prev,
         {
-          role: "ai",
-          text: "An error occurred while communicating with the AI Tutor service. Please ensure the backend server is active.",
-          citations: []
+          role: "assistant",
+          text: messageText,
+          isError: true
         }
       ]);
     } finally {
@@ -122,147 +127,225 @@ function AiTutor() {
     }
   };
 
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (asking) return;
+    void askTutor(question, messages);
+  };
+
+  const handleRetry = () => {
+    if (asking || !lastFailedQuestion) return;
+    const withoutFailedTail = [...messages];
+    // Remove trailing user + error assistant pair from the failed attempt.
+    while (withoutFailedTail.length > 0) {
+      const last = withoutFailedTail[withoutFailedTail.length - 1];
+      if (last.isError || last.role === "user") {
+        withoutFailedTail.pop();
+        if (last.role === "user") break;
+        continue;
+      }
+      break;
+    }
+    void askTutor(lastFailedQuestion, withoutFailedTail);
+  };
+
+  const handleNewConversation = () => {
+    if (asking) return;
+    setMessages([]);
+    setQuestion("");
+    setError("");
+    setLastFailedQuestion(null);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!asking && question.trim()) {
+        void askTutor(question, messages);
+      }
+    }
+  };
+
   return (
-    <div className="page-container">
+    <div className="page-container tutor-page">
       <div className="page-header">
-        <h1>AI Study Tutor & Grounded Notes RAG</h1>
+        <h1>AI Study Tutor</h1>
         <p>
-          Upload your course lecture notes or textbooks (PDF / TXT). The AI tutor extracts, chunks,
-          and retrieves passages to provide answers strictly grounded in your materials with citations.
+          Ask academic questions and get clear, student-friendly explanations.
+          Conversation history stays in this browser session and is not saved to the database.
         </p>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: "2rem" }}>
-        {/* Left Column: Upload and Notes Management */}
-        <div>
-          <div className="card">
-            <h2 className="card-title">Upload Study Notes</h2>
-            {uploadError && <div className="alert alert-danger">{uploadError}</div>}
-            {uploadMsg && <div className="alert alert-success">{uploadMsg}</div>}
-
-            <form onSubmit={handleUpload}>
-              <div className="form-group" style={{ marginBottom: "1rem" }}>
-                <label>Subject / Topic Tag</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Operating Systems"
-                  value={subject}
-                  onChange={(e) => setSubject(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: "1.25rem" }}>
-                <label>Select Document (.pdf, .txt)</label>
-                <input
-                  type="file"
-                  accept=".pdf,.txt"
-                  onChange={handleFileChange}
-                  required
-                />
-                <span className="form-help">Max size: 20MB. Text will be chunked into indexed passages.</span>
-              </div>
-
-              <button type="submit" className="btn btn-primary" style={{ width: "100%" }} disabled={uploading}>
-                {uploading ? "Extracting & Indexing Notes..." : "Upload & Process Note"}
-              </button>
-            </form>
-          </div>
-
-          <div className="card">
-            <h2 className="card-title">Indexed Notes Library</h2>
-            {notes.length === 0 ? (
-              <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
-                No notes uploaded yet. Upload a lecture PDF above to begin asking questions.
+      <div className="card tutor-status-card">
+        <div className="tutor-status-row">
+          <div>
+            <div className="stat-card-title">Tutor Service</div>
+            {statusLoading ? (
+              <p style={{ margin: "0.35rem 0 0", color: "var(--text-muted)" }}>Checking configuration...</p>
+            ) : status?.configured ? (
+              <p style={{ margin: "0.35rem 0 0" }}>
+                <span className="badge badge-low">Ready</span>{" "}
+                <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+                  Provider: {status.provider} · Model: {status.model}
+                </span>
               </p>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                {notes.map((n) => (
-                  <div
-                    key={n.note_id}
-                    onClick={() => setSelectedNoteId(n.note_id)}
-                    style={{
-                      padding: "0.85rem",
-                      borderRadius: "6px",
-                      border: selectedNoteId === n.note_id ? "2px solid var(--primary)" : "1px solid var(--border)",
-                      background: selectedNoteId === n.note_id ? "var(--primary-light)" : "#fff",
-                      cursor: "pointer",
-                      textAlign: "left"
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, fontSize: "0.95rem", color: "#1e293b" }}>
-                      📄 {n.filename}
-                    </div>
-                    <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
-                      {n.subject} • {n.total_pages} page(s) • {n.total_chunks} chunks
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <p style={{ margin: "0.35rem 0 0" }}>
+                <span className="badge badge-high">Not configured</span>{" "}
+                <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+                  {status?.message || "Set GEMINI_API_KEY in backend/.env"}
+                </span>
+              </p>
             )}
           </div>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={loadStatus} disabled={statusLoading}>
+            Refresh Status
+          </button>
+        </div>
+        {!statusLoading && !status?.configured && (
+          <div className="alert alert-info" style={{ marginTop: "1rem", marginBottom: 0 }}>
+            To enable live answers, add <code>GEMINI_API_KEY</code> to <code>backend/.env</code>, restart
+            uvicorn, then refresh this status. The chat UI still works for testing empty/error handling
+            without credentials — responses will show a clear configuration error (not a fake AI answer).
+          </div>
+        )}
+      </div>
+
+      <div className="card tutor-chat-card">
+        <div className="tutor-chat-toolbar">
+          <h2 className="card-title" style={{ margin: 0 }}>Conversation</h2>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleNewConversation}
+            disabled={asking || messages.length === 0}
+          >
+            New Conversation
+          </button>
         </div>
 
-        {/* Right Column: Grounded AI Tutor Q&A */}
-        <div>
-          <div className="card" style={{ display: "flex", flexDirection: "column", minHeight: "560px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-              <h2 className="card-title" style={{ margin: 0 }}>Grounded Tutor Chat</h2>
-              <span className="badge badge-info">Strict RAG Grounding</span>
-            </div>
-
-            <div className="chat-window" style={{ flex: 1, minHeight: "360px" }}>
-              {chatHistory.length === 0 ? (
-                <div style={{ textAlign: "center", color: "var(--text-muted)", margin: "auto" }}>
-                  <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>📖</div>
-                  <p>Ask a question about your uploaded notes.</p>
-                  <p style={{ fontSize: "0.85rem", marginTop: "0.35rem" }}>
-                    Answers cite exact page numbers. If something isn't in your notes, the tutor will inform you.
-                  </p>
-                </div>
-              ) : (
-                chatHistory.map((msg, i) => (
-                  <div
-                    key={i}
-                    className={`chat-bubble ${msg.role === "user" ? "chat-bubble-user" : "chat-bubble-ai"}`}
-                  >
-                    <div style={{ whiteSpace: "pre-wrap" }}>{msg.text}</div>
-
-                    {msg.citations?.length > 0 && (
-                      <div style={{ marginTop: "0.75rem", borderTop: "1px dashed var(--border)", paddingTop: "0.5rem" }}>
-                        <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "#64748b" }}>Citations: </span>
-                        {msg.citations.map((c, cIdx) => (
-                          <span key={cIdx} className="badge badge-info" style={{ marginRight: "0.4rem", fontSize: "0.75rem" }}>
-                            Page {c.page} (Match: {Math.round((c.similarity || 0) * 100)}%)
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-              {asking && (
-                <div className="chat-bubble chat-bubble-ai" style={{ fontStyle: "italic", color: "var(--text-muted)" }}>
-                  Retrieving relevant passages and synthesizing grounded answer...
-                </div>
-              )}
-            </div>
-
-            <form onSubmit={handleAsk} style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
-              <input
-                type="text"
-                placeholder="Ask a question about your study notes..."
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                style={{ flex: 1, padding: "0.75rem 1rem", border: "1px solid var(--border)", borderRadius: "6px" }}
-                disabled={asking}
-              />
-              <button type="submit" className="btn btn-primary" disabled={asking || !question.trim()}>
-                {asking ? "Thinking..." : "Ask Tutor"}
-              </button>
-            </form>
+        <div className="tutor-meta-grid">
+          <div className="form-group">
+            <label htmlFor="tutor-email">Student Email (optional profile context)</label>
+            <input
+              id="tutor-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Uses saved registration email when available"
+            />
+            <span className="form-help">
+              If a profile exists for this email, course/subjects may be used as light context only.
+            </span>
+          </div>
+          <div className="form-group">
+            <label htmlFor="tutor-subject">Subject / Topic (optional)</label>
+            <input
+              id="tutor-subject"
+              type="text"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder="e.g. Operating Systems"
+              maxLength={120}
+            />
           </div>
         </div>
+
+        {error && (
+          <div className="alert alert-danger tutor-error-banner">
+            <span>{error}</span>
+            {lastFailedQuestion && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleRetry}
+                disabled={asking}
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="chat-window tutor-chat-window" aria-live="polite">
+          {messages.length === 0 && !asking ? (
+            <div className="tutor-empty-state">
+              <p style={{ margin: 0, fontWeight: 600 }}>Start a conversation</p>
+              <p style={{ margin: "0.5rem 0 0", fontSize: "0.9rem" }}>
+                Example: &quot;Explain the difference between supervised and unsupervised learning with a simple example.&quot;
+              </p>
+              <p style={{ margin: "0.75rem 0 0", fontSize: "0.85rem" }}>
+                Tip: Press Enter to send, Shift+Enter for a new line.
+              </p>
+            </div>
+          ) : (
+            messages.map((msg, idx) => (
+              <div
+                key={`${msg.role}-${idx}`}
+                className={`chat-bubble ${
+                  msg.role === "user" ? "chat-bubble-user" : "chat-bubble-ai"
+                } ${msg.isError ? "chat-bubble-error" : ""}`}
+              >
+                <div className="chat-role-label">
+                  {msg.role === "user" ? "You" : msg.isError ? "Tutor error" : "AI Tutor"}
+                </div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{msg.text}</div>
+                {msg.model_used && !msg.isError && (
+                  <div className="chat-meta">
+                    {msg.provider} · {msg.model_used}
+                    {msg.profile_context_used ? " · profile context used" : ""}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+
+          {asking && (
+            <div className="chat-bubble chat-bubble-ai tutor-loading-bubble" aria-busy="true">
+              <div className="chat-role-label">AI Tutor</div>
+              <div className="tutor-typing">
+                <span />
+                <span />
+                <span />
+              </div>
+              Generating a clear explanation...
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+
+        <form onSubmit={handleSubmit} className="tutor-composer">
+          <label htmlFor="tutor-question" className="sr-only">
+            Academic question
+          </label>
+          <textarea
+            id="tutor-question"
+            ref={textareaRef}
+            rows={3}
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask an academic question..."
+            disabled={asking}
+            maxLength={MAX_QUESTION_LENGTH}
+            aria-describedby="tutor-char-count"
+          />
+          <div className="tutor-composer-actions">
+            <span id="tutor-char-count" className="form-help">
+              {question.length}/{MAX_QUESTION_LENGTH}
+            </span>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={asking || !question.trim()}
+            >
+              {asking ? "Thinking..." : "Ask Tutor"}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from pydantic import ValidationError
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from app.models.schemas import AskTutorRequest
+from app.models.schemas import AskTutorRequest, TutorChatRequest, TutorChatResponse
 from app.services.rag_service import (
     extract_text_from_pdf,
     extract_text_from_txt,
@@ -9,7 +10,14 @@ from app.services.rag_service import (
     retrieve_relevant_passages
 )
 from app.services.ai_service import generate_tutor_response
-from app.database.mongodb import notes_collection
+from app.services.tutor_service import (
+    answer_academic_question,
+    get_tutor_status,
+    TutorNotConfiguredError,
+    TutorTimeoutError,
+    TutorProviderError,
+)
+from app.database.mongodb import notes_collection, students_collection
 
 router = APIRouter(prefix="/ai", tags=["AI Tutor & Notes RAG"])
 
@@ -110,6 +118,68 @@ def get_student_notes(email: str):
             })
 
     return {"notes": notes_list}
+
+
+@router.get("/tutor/status")
+def tutor_status_endpoint():
+    """Reports whether the M14 general AI Tutor provider is configured."""
+    return get_tutor_status()
+
+
+@router.post("/tutor", response_model=TutorChatResponse)
+def general_tutor_endpoint(request: TutorChatRequest):
+    """
+    M14 general academic AI Tutor.
+    Answers student questions with a configured LLM provider.
+    Does not use uploaded notes or fabricate note citations (M15–M16).
+    """
+    question = (request.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="Question cannot be empty.")
+
+    profile_context = None
+    if request.include_profile_context and request.email and students_collection is not None:
+        try:
+            profile = students_collection.find_one(
+                {"email": request.email},
+                {"_id": 0, "course": 1, "branch": 1, "year": 1, "subjects": 1},
+            )
+            if profile:
+                profile_context = {
+                    "course": profile.get("course"),
+                    "branch": profile.get("branch"),
+                    "year": profile.get("year"),
+                    "subjects": profile.get("subjects"),
+                }
+        except Exception as profile_err:
+            # Non-fatal: tutor still works without profile enrichment.
+            print(f"Non-fatal error loading profile context for tutor: {type(profile_err).__name__}")
+
+    history = [m.model_dump() for m in request.conversation_history]
+
+    try:
+        result = answer_academic_question(
+            question,
+            subject=request.subject,
+            conversation_history=history,
+            profile_context=profile_context,
+        )
+        return result
+    except TutorNotConfiguredError as cfg_err:
+        raise HTTPException(status_code=503, detail=str(cfg_err)) from cfg_err
+    except TutorTimeoutError as timeout_err:
+        raise HTTPException(status_code=504, detail=str(timeout_err)) from timeout_err
+    except TutorProviderError as provider_err:
+        raise HTTPException(status_code=502, detail=str(provider_err)) from provider_err
+    except ValueError as val_err:
+        raise HTTPException(status_code=422, detail=str(val_err)) from val_err
+    except ValidationError as validation_err:
+        raise HTTPException(status_code=422, detail=str(validation_err)) from validation_err
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="AI Tutor failed unexpectedly. Please try again later.",
+        ) from exc
 
 
 @router.post("/ask")

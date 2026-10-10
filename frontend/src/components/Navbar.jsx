@@ -20,7 +20,7 @@ function Navbar() {
           Study Planner
         </NavLink>
         <NavLink to="/tutor" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          AI Tutor & Notes
+          AI Tutor
         </NavLink>
         <NavLink to="/dashboard" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
           Dashboard
