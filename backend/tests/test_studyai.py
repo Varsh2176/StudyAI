@@ -413,6 +413,69 @@ class TestStudyHourRecommendation(unittest.TestCase):
         self.assertIn("disclaimer", res)
         self.assertIn("not study-hour targets", res["disclaimer"])
 
+    def test_dynamic_risk_integration_high_risk(self):
+        # Omit risk_category, but provide critical academic indicators
+        req = StudyHourRecommendationRequest(
+            daily_available_hours=6.0,
+            subjects=[
+                StudyHourSubjectInput(name="Algorithms", difficulty="High", current_score=50.0, target_score=85.0),
+                StudyHourSubjectInput(name="Networks", difficulty="Medium", current_score=55.0, target_score=80.0)
+            ],
+            risk_category=None,
+            attendance=55.0,        # Critical (< 65%) -> 3 pts
+            previous_scores=50.0,   # Critical (< 55%) -> 3 pts -> Total >= 6 pts (High Risk)
+            predicted_exam_score=52.0
+        )
+        res = recommend_study_hours_endpoint(req)
+        self.assertEqual(res["risk_category_applied"], "High Risk")
+        self.assertIsNotNone(res["risk_assessment_details"])
+        self.assertGreaterEqual(res["risk_assessment_details"]["risk_score"], 4)
+        self.assertIn("High Risk", res["concise_explanation"])
+
+    def test_dynamic_risk_integration_moderate_risk(self):
+        # Omit risk_category, but provide borderline indicators
+        req = StudyHourRecommendationRequest(
+            daily_available_hours=5.0,
+            subjects=[
+                StudyHourSubjectInput(name="DBMS", difficulty="Medium", current_score=68.0, target_score=85.0)
+            ],
+            risk_category=None,
+            attendance=70.0,        # Borderline (65-75%) -> 1 pt
+            previous_scores=68.0,   # Borderline (55-70%) -> 1 pt -> Total 2 pts (Moderate Risk)
+            predicted_exam_score=68.0
+        )
+        res = recommend_study_hours_endpoint(req)
+        self.assertEqual(res["risk_category_applied"], "Moderate Risk")
+        self.assertIsNotNone(res["risk_assessment_details"])
+        self.assertEqual(res["risk_assessment_details"]["risk_category"], "Moderate Risk")
+
+    def test_default_risk_when_indicators_omitted(self):
+        # Neither risk_category nor indicators provided
+        req = StudyHourRecommendationRequest(
+            daily_available_hours=4.0,
+            subjects=[
+                StudyHourSubjectInput(name="Software Engineering", difficulty="Low", current_score=80.0, target_score=85.0)
+            ]
+        )
+        res = recommend_study_hours_endpoint(req)
+        self.assertEqual(res["risk_category_applied"], "Low Risk")
+
+    def test_custom_burnout_cap_applied(self):
+        # Student requests extreme hours with low max_daily_limit
+        req = StudyHourRecommendationRequest(
+            daily_available_hours=10.0,
+            subjects=[
+                StudyHourSubjectInput(name="Math", difficulty="High", current_score=20.0, target_score=95.0),
+                StudyHourSubjectInput(name="Physics", difficulty="High", current_score=20.0, target_score=95.0)
+            ],
+            risk_category="High Risk",
+            max_daily_limit=4.0
+        )
+        res = recommend_study_hours_endpoint(req)
+        self.assertTrue(res["burnout_guardrail_applied"])
+        self.assertLessEqual(res["recommended_daily_hours"], 4.0)
+        self.assertLessEqual(res["recommended_weekly_hours"], 28.0)
+
 
 class TestPreservedBackendRoutes(unittest.TestCase):
     def test_registered_route_paths(self):

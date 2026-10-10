@@ -112,6 +112,15 @@ class StudyHourRecommendationRequest(BaseModel):
         default=8.0, ge=2.0, le=12.0, description="Maximum daily study limit to prevent burnout"
     )
     email: Optional[str] = None
+    attendance: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0, description="Student attendance percentage for dynamic risk assessment"
+    )
+    previous_scores: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0, description="Student previous score percentage for dynamic risk assessment"
+    )
+    predicted_exam_score: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0, description="ML predicted exam score for dynamic risk assessment"
+    )
 
 
 class SubjectHourBreakdown(BaseModel):
@@ -135,3 +144,4 @@ class StudyHourRecommendationResponse(BaseModel):
     concise_explanation: str
     methodology_notes: str
     disclaimer: str
+    risk_assessment_details: Optional[Dict[str, Any]] = None

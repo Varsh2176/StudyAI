@@ -44,7 +44,8 @@ def calculate_study_hour_recommendation(
     subjects: List[Dict[str, Any]],
     risk_category: Optional[str] = None,
     max_daily_limit: Optional[float] = None,
-    config: Optional[RecommendationConfig] = None
+    config: Optional[RecommendationConfig] = None,
+    risk_details: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Computes personalized daily and weekly study hours for the student and per subject.
@@ -217,6 +218,7 @@ def calculate_study_hour_recommendation(
         "disclaimer": (
             "This study-hour allocation is an advisory planning recommendation. The ML model predicts exam scores, "
             "not study-hour targets. Study hours should be balanced with adequate sleep and personal well-being."
-        )
+        ),
+        "risk_assessment_details": risk_details
     }
 
