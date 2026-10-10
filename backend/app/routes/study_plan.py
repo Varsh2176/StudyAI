@@ -1,43 +1,77 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Body
-from app.models.schemas import StudyPlanGenerateRequest, StudyHourRecommendationRequest, StudyHourRecommendationResponse
+from app.models.schemas import (
+    StudyPlanGenerateRequest,
+    StudyPlanResponse,
+    StudyHourRecommendationRequest,
+    StudyHourRecommendationResponse
+)
 from app.services.scheduler import generate_study_plan
 from app.database.mongodb import study_plans_collection
 
 router = APIRouter(prefix="/study-plan", tags=["Study Plan"])
 
 
-@router.post("/generate")
+@router.post("/generate", response_model=StudyPlanResponse)
 def generate_plan_endpoint(request: StudyPlanGenerateRequest):
     """
-    Deterministically computes a personalized daily and weekly study plan
-    based on student study hours, subject difficulty, exam dates, and score gaps.
+    Deterministically computes a personalized daily study timetable and weekly schedule
+    bounded by student available hours, M10 recommended hours, subject difficulty, and exam urgency.
     """
-    subjects_data = [s.model_dump() for s in request.subjects]
-    plan = generate_study_plan(
-        subjects=subjects_data,
-        daily_study_hours=request.daily_study_hours,
-        preferred_start_time=request.preferred_start_time,
-        days_to_plan=request.days_to_plan
-    )
+    try:
+        from app.database.mongodb import students_collection
 
-    # If student email is provided, save or update their active plan in MongoDB
-    if request.email and study_plans_collection is not None:
-        try:
-            record = {
-                "email": request.email,
-                "plan": plan,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-            study_plans_collection.update_one(
-                {"email": request.email},
-                {"$set": record},
-                upsert=True
-            )
-        except Exception as db_err:
-            print(f"Non-fatal error persisting study plan: {db_err}")
+        # Check student profile if email is provided and daily_available_hours not explicitly set
+        avail_hours = request.daily_available_hours
+        if request.email and avail_hours is None and students_collection is not None:
+            try:
+                prof = students_collection.find_one({"email": request.email})
+                if prof and prof.get("study_hours"):
+                    avail_hours = float(prof["study_hours"])
+            except Exception as pe:
+                print(f"Non-fatal error retrieving student profile in scheduler: {pe}")
 
-    return plan
+        subjects_data = [s.model_dump() for s in request.subjects]
+        plan = generate_study_plan(
+            subjects=subjects_data,
+            daily_study_hours=request.daily_study_hours,
+            preferred_start_time=request.preferred_start_time,
+            days_to_plan=request.days_to_plan,
+            daily_available_hours=avail_hours,
+            risk_category=request.risk_category,
+            max_daily_limit=request.max_daily_limit,
+            plan_date=request.plan_date
+        )
+
+        # If student email is provided, save or update their active plan in MongoDB
+        if request.email and study_plans_collection is not None:
+            try:
+                record = {
+                    "email": request.email,
+                    "plan": plan,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }
+                study_plans_collection.update_one(
+                    {"email": request.email},
+                    {"$set": record},
+                    upsert=True
+                )
+            except Exception as db_err:
+                print(f"Non-fatal error persisting study plan: {db_err}")
+
+        return plan
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate study timetable: {str(e)}")
+
+
+@router.post("/timetable", response_model=StudyPlanResponse)
+def generate_timetable_endpoint(request: StudyPlanGenerateRequest):
+    """
+    Direct alias endpoint to generate a deterministic daily study timetable (Milestone 11).
+    """
+    return generate_plan_endpoint(request)
 
 
 @router.get("/{email}")

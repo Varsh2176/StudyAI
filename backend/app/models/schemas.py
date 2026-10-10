@@ -49,21 +49,75 @@ class ExamScorePredictionResponse(BaseModel):
     risk_assessment: Dict[str, Any]
 
 
-# Study Planner Schemas (Phase D)
+# Study Planner Schemas (Milestone 11 / Phase D)
 class PlanSubject(BaseModel):
-    name: str
-    difficulty: str = Field(default="Medium", description="Low, Medium, or High")
-    exam_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
-    current_score: Optional[float] = Field(default=60.0, ge=0, le=100)
-    target_score: Optional[float] = Field(default=85.0, ge=0, le=100)
+    name: str = Field(..., min_length=1, description="Subject name")
+    difficulty: Literal["Low", "Medium", "High", "low", "medium", "high"] = Field(
+        default="Medium", description="Subject difficulty level"
+    )
+    exam_date: Optional[str] = Field(default=None, description="Upcoming exam date (YYYY-MM-DD)")
+    current_score: Optional[float] = Field(default=60.0, ge=0.0, le=100.0, description="Current score (0-100)")
+    target_score: Optional[float] = Field(default=85.0, ge=0.0, le=100.0, description="Target score (0-100)")
 
 
 class StudyPlanGenerateRequest(BaseModel):
     email: Optional[str] = None
-    daily_study_hours: float = Field(default=4.0, ge=1.0, le=12.0)
+    daily_study_hours: Optional[float] = Field(default=4.0, ge=0.5, le=16.0, description="Requested daily study hours")
+    daily_available_hours: Optional[float] = Field(default=None, ge=0.5, le=16.0, description="Available daily hours")
     preferred_start_time: str = Field(default="09:00", description="HH:MM format")
-    subjects: List[PlanSubject]
-    days_to_plan: int = Field(default=7, ge=1, le=30)
+    subjects: List[PlanSubject] = Field(..., min_length=1, description="Subjects to schedule")
+    days_to_plan: int = Field(default=7, ge=1, le=30, description="Days to plan ahead (1-30)")
+    risk_category: Optional[Literal["Low Risk", "Moderate Risk", "High Risk", "Medium Risk"]] = Field(
+        default=None, description="Optional academic risk category"
+    )
+    max_daily_limit: Optional[float] = Field(
+        default=8.0, ge=2.0, le=12.0, description="Maximum daily study limit to prevent burnout"
+    )
+    plan_date: Optional[str] = Field(default=None, description="Anchor date for plan generation (YYYY-MM-DD)")
+
+
+class TimetableSlot(BaseModel):
+    slot_order: int
+    slot_id: str
+    subject: str
+    difficulty: str
+    priority_level: str
+    duration_minutes: int
+    start_time: str
+    end_time: str
+    break_duration_minutes: int
+    break_time: str
+    recommended_focus: str
+    completed: bool = False
+
+
+class SubjectAllocationSummary(BaseModel):
+    subject: str
+    difficulty: str
+    priority_score: float
+    allocated_ratio: float
+    allocated_study_minutes: int
+    allocated_study_hours: float
+    slots_count: int
+
+
+class StudyPlanResponse(BaseModel):
+    plan_date: str
+    daily_study_hours: float
+    daily_available_hours: float
+    m10_recommended_daily_hours: float
+    total_scheduled_study_minutes: int
+    total_scheduled_study_hours: float
+    total_break_minutes: int
+    burnout_guardrail_applied: bool
+    days_planned: int
+    subjects_weighted: List[Dict[str, Any]]
+    daily_schedule: List[Dict[str, Any]]
+    weekly_schedule: Dict[str, List[Dict[str, Any]]]
+    timetable: List[TimetableSlot]
+    subject_allocations: List[SubjectAllocationSummary]
+    summary: str
+    notes: str
 
 
 # Progress & Quiz Schemas (Phase G)

@@ -9,10 +9,17 @@ from app.models.schemas import (
     ExamScorePredictionResponse,
     StudyHourRecommendationRequest,
     StudyHourSubjectInput,
-    StudyHourRecommendationResponse
+    StudyHourRecommendationResponse,
+    PlanSubject,
+    StudyPlanGenerateRequest,
+    StudyPlanResponse
 )
 from app.routes.prediction import predict_score_endpoint
-from app.routes.study_plan import recommend_study_hours_endpoint
+from app.routes.study_plan import (
+    recommend_study_hours_endpoint,
+    generate_plan_endpoint,
+    generate_timetable_endpoint
+)
 from app.services.ml_service import load_model, predict_exam_score, evaluate_risk, get_model_metadata
 from app.services.risk_service import evaluate_academic_risk, RiskThresholds, DEFAULT_THRESHOLDS
 from app.services.study_hour_recommendation import (
@@ -486,6 +493,7 @@ class TestPreservedBackendRoutes(unittest.TestCase):
         self.assertIn("/predict/exam-score", paths)
         self.assertIn("/predict/model-status", paths)
         self.assertIn("/study-plan/generate", paths)
+        self.assertIn("/study-plan/timetable", paths)
         self.assertIn("/study-plan/recommend-hours", paths)
         self.assertIn("/health", paths)
 
@@ -520,6 +528,205 @@ class TestStudyPlanner(unittest.TestCase):
         self.assertEqual(len(plan["weekly_schedule"]), 5)
         self.assertIn("start_time", plan["daily_schedule"][0])
         self.assertIn("break_time", plan["daily_schedule"][0])
+        self.assertIn("timetable", plan)
+        self.assertIn("subject_allocations", plan)
+        self.assertIn("summary", plan)
+
+    def test_scheduler_determinism(self):
+        # Identical inputs with anchor date must yield identical outputs
+        subjects = [
+            {"name": "Algorithms", "difficulty": "High", "current_score": 55, "target_score": 85, "exam_date": "2026-10-25"},
+            {"name": "Computer Networks", "difficulty": "Medium", "current_score": 70, "target_score": 85},
+            {"name": "Technical Writing", "difficulty": "Low", "current_score": 80, "target_score": 90}
+        ]
+        plan_a = generate_study_plan(
+            subjects=subjects,
+            daily_study_hours=4.0,
+            preferred_start_time="09:00",
+            days_to_plan=7,
+            plan_date="2026-10-20"
+        )
+        plan_b = generate_study_plan(
+            subjects=subjects,
+            daily_study_hours=4.0,
+            preferred_start_time="09:00",
+            days_to_plan=7,
+            plan_date="2026-10-20"
+        )
+        self.assertEqual(plan_a, plan_b)
+        self.assertEqual(plan_a["timetable"], plan_b["timetable"])
+
+    def test_subject_allocation_proportional_to_difficulty_and_urgency(self):
+        subjects = [
+            {"name": "Operating Systems", "difficulty": "High", "current_score": 45, "target_score": 85, "exam_date": "2026-10-22"},
+            {"name": "Discrete Math", "difficulty": "Medium", "current_score": 70, "target_score": 80},
+            {"name": "Environmental Studies", "difficulty": "Low", "current_score": 85, "target_score": 90}
+        ]
+        plan = generate_study_plan(
+            subjects=subjects,
+            daily_study_hours=4.0,
+            plan_date="2026-10-20"
+        )
+        weighted = plan["subjects_weighted"]
+        # OS has High diff, large gap (40 pts), and exam in 2 days -> must be highest priority
+        self.assertEqual(weighted[0]["name"], "Operating Systems")
+        self.assertEqual(weighted[0]["priority_level"], "High Priority")
+        # Slot 1 must be Operating Systems (cognitive peak scheduling)
+        self.assertEqual(plan["timetable"][0]["subject"], "Operating Systems")
+        # OS must have largest allocated ratio
+        self.assertGreater(weighted[0]["allocated_ratio"], weighted[1]["allocated_ratio"])
+        self.assertGreater(weighted[1]["allocated_ratio"], weighted[2]["allocated_ratio"])
+
+    def test_scheduled_time_never_exceeds_available_or_m10_recommendation(self):
+        # Available hours = 2.0 (120 mins)
+        subjects = [
+            {"name": "AI", "difficulty": "High", "current_score": 50, "target_score": 90},
+            {"name": "Cloud", "difficulty": "Medium", "current_score": 60, "target_score": 85}
+        ]
+        plan = generate_study_plan(
+            subjects=subjects,
+            daily_available_hours=2.0,
+            daily_study_hours=2.0
+        )
+        self.assertLessEqual(plan["total_scheduled_study_hours"], 2.0)
+        self.assertLessEqual(plan["total_scheduled_study_minutes"], 120)
+        self.assertLessEqual(plan["total_scheduled_study_hours"], plan["m10_recommended_daily_hours"])
+
+    def test_daily_burnout_limit_guardrail(self):
+        # Student requests 12 hours with max limit of 4.0
+        subjects = [
+            {"name": "Calculus", "difficulty": "High", "current_score": 30, "target_score": 90},
+            {"name": "Physics", "difficulty": "High", "current_score": 30, "target_score": 90}
+        ]
+        plan = generate_study_plan(
+            subjects=subjects,
+            daily_available_hours=12.0,
+            daily_study_hours=12.0,
+            max_daily_limit=4.0
+        )
+        self.assertTrue(plan["burnout_guardrail_applied"])
+        self.assertLessEqual(plan["total_scheduled_study_hours"], 4.0)
+        self.assertLessEqual(plan["daily_study_hours"], 4.0)
+
+    def test_compact_session_for_small_available_time(self):
+        # Available hours = 0.5 (30 mins)
+        subjects = [
+            {"name": "History", "difficulty": "Low", "current_score": 75, "target_score": 85}
+        ]
+        plan = generate_study_plan(
+            subjects=subjects,
+            daily_study_hours=0.5
+        )
+        self.assertEqual(len(plan["timetable"]), 1)
+        self.assertEqual(plan["timetable"][0]["duration_minutes"], 30)
+        self.assertLessEqual(plan["total_scheduled_study_hours"], 0.5)
+
+    def test_timetable_slot_ordering_and_times(self):
+        subjects = [
+            {"name": "SubjA", "difficulty": "Medium", "current_score": 60, "target_score": 80},
+            {"name": "SubjB", "difficulty": "High", "current_score": 50, "target_score": 85}
+        ]
+        plan = generate_study_plan(
+            subjects=subjects,
+            daily_study_hours=3.0,
+            preferred_start_time="10:00"
+        )
+        slots = plan["timetable"]
+        self.assertEqual(len(slots), 3)
+        self.assertEqual(slots[0]["slot_order"], 1)
+        self.assertEqual(slots[1]["slot_order"], 2)
+        self.assertEqual(slots[2]["slot_order"], 3)
+        self.assertEqual(slots[0]["start_time"], "10:00")
+        self.assertEqual(slots[0]["end_time"], "10:50")
+        self.assertEqual(slots[1]["start_time"], "11:00")
+
+    def test_validation_empty_subjects_raises_error(self):
+        with self.assertRaises(ValueError):
+            generate_study_plan(subjects=[])
+
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(subjects=[])
+
+    def test_validation_blank_subject_name_raises_error(self):
+        with self.assertRaises(ValueError):
+            generate_study_plan(subjects=[{"name": "   ", "difficulty": "High"}])
+
+        with self.assertRaises(ValidationError):
+            PlanSubject(name="")
+
+    def test_validation_invalid_durations_raises_error(self):
+        subjects = [{"name": "Math", "difficulty": "Medium", "current_score": 60, "target_score": 80}]
+        # Negative hours
+        with self.assertRaises(ValueError):
+            generate_study_plan(subjects=subjects, daily_study_hours=-2.0)
+
+        # Excessive hours (> 16)
+        with self.assertRaises(ValueError):
+            generate_study_plan(subjects=subjects, daily_study_hours=20.0)
+
+        # Request schema validation
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(subjects=[PlanSubject(name="Math")], daily_study_hours=-1.0)
+
+        with self.assertRaises(ValidationError):
+            StudyPlanGenerateRequest(subjects=[PlanSubject(name="Math")], daily_study_hours=25.0)
+
+    def test_validation_invalid_scores_raises_error(self):
+        with self.assertRaises(ValueError):
+            generate_study_plan(subjects=[{"name": "Bio", "current_score": 110.0}])
+
+        with self.assertRaises(ValueError):
+            generate_study_plan(subjects=[{"name": "Bio", "current_score": -5.0}])
+
+    def test_conflicting_inputs_handled_safely(self):
+        # 1. Target < Current: does not crash
+        plan = generate_study_plan(
+            subjects=[{"name": "Mastered Subj", "difficulty": "Low", "current_score": 95, "target_score": 80}],
+            daily_study_hours=2.0
+        )
+        self.assertEqual(plan["subjects_weighted"][0]["score_gap"], 0.0)
+        self.assertEqual(plan["subjects_weighted"][0]["priority_level"], "Maintenance")
+
+        # 2. Past exam date: does not crash
+        past_date = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+        plan_past = generate_study_plan(
+            subjects=[{"name": "Past Exam Subj", "difficulty": "High", "exam_date": past_date}],
+            daily_study_hours=2.0
+        )
+        self.assertIsNotNone(plan_past["timetable"])
+
+        # 3. Invalid preferred_start_time: defaults safely to 09:00
+        plan_time = generate_study_plan(
+            subjects=[{"name": "Subj", "difficulty": "Medium"}],
+            preferred_start_time="99:99"
+        )
+        self.assertEqual(plan_time["timetable"][0]["start_time"], "09:00")
+
+    def test_api_endpoints_generate_and_timetable(self):
+        req = StudyPlanGenerateRequest(
+            daily_study_hours=3.0,
+            preferred_start_time="08:30",
+            days_to_plan=3,
+            subjects=[
+                PlanSubject(name="Cloud Computing", difficulty="High", current_score=60.0, target_score=85.0),
+                PlanSubject(name="Cybersecurity", difficulty="Medium", current_score=75.0, target_score=90.0)
+            ],
+            risk_category="Moderate Risk"
+        )
+        # 1. Test POST /study-plan/generate
+        res_gen = generate_plan_endpoint(req)
+        self.assertIn("timetable", res_gen)
+        self.assertIn("subject_allocations", res_gen)
+        self.assertIn("daily_schedule", res_gen)
+        self.assertIn("weekly_schedule", res_gen)
+        self.assertIn("summary", res_gen)
+        self.assertEqual(len(res_gen["timetable"]), 3)
+        self.assertEqual(res_gen["timetable"][0]["start_time"], "08:30")
+
+        # 2. Test POST /study-plan/timetable
+        res_tt = generate_timetable_endpoint(req)
+        self.assertEqual(res_tt["timetable"], res_gen["timetable"])
+        self.assertEqual(res_tt["total_scheduled_study_hours"], res_gen["total_scheduled_study_hours"])
 
 
 class TestRAGAndAITutor(unittest.TestCase):
