@@ -8,8 +8,14 @@ from app.routes.prediction import router as prediction_router
 from app.routes.study_plan import router as study_plan_router
 from app.routes.ai import router as ai_router
 from app.routes.performance import router as performance_router
+from app.routes.documents import router as documents_router
 from app.services.ml_service import load_model, get_model_metadata
-from app.database.mongodb import client, db
+from app.database.mongodb import (
+    client,
+    db,
+    diagnose_mongodb_connectivity,
+    get_database_status_summary,
+)
 
 
 @asynccontextmanager
@@ -53,6 +59,7 @@ app.include_router(prediction_router)
 app.include_router(study_plan_router)
 app.include_router(ai_router)
 app.include_router(performance_router)
+app.include_router(documents_router)
 
 
 @app.get("/")
@@ -68,12 +75,13 @@ def health():
     meta = get_model_metadata()
     model_name = meta.get("selected_model", "Unavailable")
     model_r2 = meta.get("selected_model_metrics", {}).get("R2", None)
-
-    db_status = "connected" if client is not None else "disconnected"
+    db_summary = get_database_status_summary()
 
     return {
         "status": "healthy",
-        "database": db_status,
+        "database": db_summary.get("database"),
+        "database_failure_stage": db_summary.get("failure_stage"),
+        "database_detail": db_summary.get("detail"),
         "database_name": db.name if db is not None else None,
         "ml_model": {
             "loaded": True if model_name != "Unavailable" else False,
@@ -81,3 +89,12 @@ def health():
             "r2_score": model_r2
         }
     }
+
+
+@app.get("/health/database")
+def health_database():
+    """
+    Safe staged MongoDB connectivity diagnostic.
+    Reports failure stage without exposing URI or credentials.
+    """
+    return diagnose_mongodb_connectivity()

@@ -32,15 +32,30 @@ function Register() {
         setError("A student with this email is already registered. You can proceed directly to your profile.");
         localStorage.setItem("student_email", form.email);
       } else {
-        setSuccess("Registration successful! Redirecting to student profile...");
+        const persistenceWarning =
+          response.data.persistence === "memory" || response.data.warning
+            ? ` ${response.data.warning || "Saved temporarily in memory only — not persisted to MongoDB."}`
+            : "";
+        setSuccess(`Registration successful!${persistenceWarning} Redirecting to student profile...`);
         localStorage.setItem("student_email", form.email);
         setTimeout(() => {
           navigate("/profile");
-        }, 1200);
+        }, response.data.persistence === "memory" ? 3200 : 1200);
       }
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.detail || "Failed to register. Please ensure backend is running.");
+      const detail = err.response?.data?.detail;
+      const detailText = Array.isArray(detail)
+        ? detail.map((d) => d.msg || JSON.stringify(d)).join(" ")
+        : typeof detail === "string"
+          ? detail
+          : "";
+      setError(
+        detailText ||
+          (err.code === "ERR_NETWORK"
+            ? "Cannot reach the API. Confirm the backend is running on http://127.0.0.1:8000."
+            : "Failed to register. Please ensure backend is running.")
+      );
     } finally {
       setLoading(false);
     }

@@ -681,3 +681,35 @@ body {
     align-items: stretch;
   }
 }
+
+/* M15 PDF documents */
+.pdf-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: #f8fafc;
+  padding: 1.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.pdf-dropzone:hover,
+.pdf-dropzone-active {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.pdf-panel-compact .styled-table {
+  font-size: 0.9rem;
+}
+
+@media (max-width: 640px) {
+  .pdf-dropzone {
+    padding: 1.15rem 0.75rem;
+  }
+}

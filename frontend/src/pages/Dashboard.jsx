@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import API from "../services/api";
+import PdfDocumentsPanel from "../components/PdfDocumentsPanel";
 
 function getRiskBadgeClass(level) {
   if (level === "High Risk") return "badge-high";
@@ -594,6 +595,16 @@ function Dashboard() {
                 )}
               </>
             )}
+          </div>
+
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.9rem" }}>
+                Upload PDF study materials for secure storage and text extraction (ready for M16).
+              </p>
+              <Link to="/documents" className="btn btn-secondary btn-sm">Open Materials Page</Link>
+            </div>
+            <PdfDocumentsPanel email={email} compact />
           </div>
         </>
       )}

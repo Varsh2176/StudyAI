@@ -25,6 +25,9 @@ function Navbar() {
         <NavLink to="/dashboard" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
           Dashboard
         </NavLink>
+        <NavLink to="/documents" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
+          Materials
+        </NavLink>
         <NavLink to="/progress" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
           Progress
         </NavLink>

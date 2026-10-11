@@ -41,7 +41,8 @@ from app.services.study_hour_recommendation import (
 from app.services.scheduler import calculate_subject_weights, generate_study_plan
 from app.services.rag_service import extract_text_from_txt, chunk_document, retrieve_relevant_passages
 from app.services.ai_service import generate_tutor_response
-from app.main import app, health
+from app.main import app, health, health_database
+from app.database.mongodb import diagnose_mongodb_connectivity, _redact_error_message
 
 
 def get_valid_payload():
@@ -508,7 +509,12 @@ class TestPreservedBackendRoutes(unittest.TestCase):
         self.assertIn("/study-plan/recommend-hours", paths)
         self.assertIn("/ai/tutor", paths)
         self.assertIn("/ai/tutor/status", paths)
+        self.assertIn("/documents/upload", paths)
+        self.assertIn("/documents", paths)
+        self.assertIn("/documents/{document_id}", paths)
+        self.assertIn("/documents/{document_id}/text", paths)
         self.assertIn("/health", paths)
+        self.assertIn("/health/database", paths)
 
     def test_health_check(self):
         res = health()
@@ -516,6 +522,27 @@ class TestPreservedBackendRoutes(unittest.TestCase):
         self.assertIn("ml_model", res)
         self.assertTrue(res["ml_model"]["loaded"])
         self.assertEqual(res["ml_model"]["algorithm"], "RidgeRegression")
+        self.assertIn("database", res)
+        self.assertIn(res["database"], {"connected", "unreachable", "disconnected"})
+
+    def test_database_diagnostic_endpoint_shape_and_no_secrets(self):
+        report = health_database()
+        self.assertIn(report["status"], {"connected", "failed"})
+        self.assertIn("stages", report)
+        self.assertIsInstance(report["stages"], list)
+        self.assertGreaterEqual(len(report["stages"]), 1)
+        self.assertIn("recommendations", report)
+        self.assertIn("persistence_note", report)
+        dumped = str(report)
+        self.assertNotIn("mongodb+srv://", dumped.lower().replace("scheme=mongodb+srv", ""))
+        # Ensure raw URI credentials are not present even if env has them
+        self.assertNotRegex(dumped, r":[^/\s]{4,}@")
+
+    def test_error_redaction_strips_uri_credentials(self):
+        dirty = "failed mongodb+srv://user:supersecret@cluster.mongodb.net/?retryWrites=true"
+        clean = _redact_error_message(dirty)
+        self.assertNotIn("supersecret", clean)
+        self.assertIn("mongodb://***", clean)
 
 
 class TestStudyPlanner(unittest.TestCase):
@@ -1087,6 +1114,258 @@ class TestGeneralAITutorM14(unittest.TestCase):
             # No auth header / token required — mirrors /predict and /study-plan.
             res = general_tutor_endpoint(TutorChatRequest(question="What is a linked list?"))
             self.assertEqual(res["answer"], "OK")
+
+
+class TestPdfDocumentsM15(unittest.TestCase):
+    """M15 PDF upload, validation, extraction, ownership, and deletion tests."""
+
+    @staticmethod
+    def _make_pdf_bytes(text: str = "") -> bytes:
+        """Build a minimal PDF. Empty text -> blank page (no extractable text)."""
+        if not text:
+            from pypdf import PdfWriter
+            import io as _io
+            writer = PdfWriter()
+            writer.add_blank_page(width=300, height=144)
+            buf = _io.BytesIO()
+            writer.write(buf)
+            return buf.getvalue()
+
+        safe = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream = f"BT /F1 12 Tf 10 50 Td ({safe}) Tj ET\n".encode("latin-1")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] "
+                b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"endstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]
+        out = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for i, obj in enumerate(objects, start=1):
+            offsets.append(len(out))
+            out.extend(f"{i} 0 obj\n".encode("ascii"))
+            out.extend(obj)
+            out.extend(b"\nendobj\n")
+        xref_pos = len(out)
+        out.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+        out.extend(b"0000000000 65535 f \n")
+        for off in offsets[1:]:
+            out.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+        out.extend(
+            f"trailer<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
+        )
+        return bytes(out)
+
+    def setUp(self):
+        import tempfile
+        from app.routes import documents as documents_routes
+        from app.services import pdf_document_service as pdf_service
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._env_patch = patch.dict(
+            "os.environ",
+            {
+                "PDF_STORAGE_DIR": self._tmpdir.name,
+                "PDF_UPLOAD_MAX_BYTES": str(256 * 1024),
+            },
+            clear=False,
+        )
+        self._env_patch.start()
+        # Avoid waiting on Atlas during unit tests; use in-memory + temp disk.
+        self._mongo_patch = patch.object(documents_routes, "documents_collection", None)
+        self._mongo_patch.start()
+        documents_routes._documents_cache.clear()
+        self.addCleanup(self._mongo_patch.stop)
+        self.addCleanup(self._env_patch.stop)
+        self.addCleanup(self._tmpdir.cleanup)
+        self.addCleanup(documents_routes._documents_cache.clear)
+        self.pdf_service = pdf_service
+        self.documents_routes = documents_routes
+
+    def test_valid_pdf_upload_and_text_extraction(self):
+        from fastapi import UploadFile
+        import io as _io
+
+        pdf_bytes = self._make_pdf_bytes("Gradient descent overview")
+        upload = UploadFile(filename="notes.pdf", file=_io.BytesIO(pdf_bytes))
+
+        async def _run():
+            return await self.documents_routes.upload_pdf_document(
+                file=upload,
+                email="alice@example.edu",
+                subject="ML",
+            )
+
+        result = asyncio_run(_run())
+        self.assertEqual(result["status"], "processed")
+        self.assertTrue(result["text_available"])
+        self.assertGreater(result["extracted_characters"], 0)
+        self.assertEqual(result["page_count"], 1)
+        self.assertIn("document_id", result)
+        self.assertNotIn("storage_key", result)
+        self.assertNotIn("pages", result)
+
+        listed = self.documents_routes.list_documents(email="alice@example.edu")
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["documents"][0]["document_id"], result["document_id"])
+
+        text_payload = self.documents_routes.get_document_extracted_text(
+            result["document_id"],
+            email="alice@example.edu",
+        )
+        self.assertTrue(text_payload["text_available"])
+        self.assertIn("Gradient descent", text_payload["pages"][0]["text"])
+
+    def test_empty_file_rejected(self):
+        with self.assertRaises(self.pdf_service.PdfDocumentError) as ctx:
+            self.pdf_service.validate_pdf_bytes(b"")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_non_pdf_extension_rejected_at_endpoint(self):
+        from fastapi import UploadFile
+        import io as _io
+
+        upload = UploadFile(filename="notes.txt", file=_io.BytesIO(b"hello"))
+
+        async def _run():
+            return await self.documents_routes.upload_pdf_document(
+                file=upload,
+                email="alice@example.edu",
+                subject="General",
+            )
+
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio_run(_run())
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_incorrect_pdf_signature_rejected(self):
+        with self.assertRaises(self.pdf_service.PdfDocumentError) as ctx:
+            self.pdf_service.validate_pdf_bytes(b"NOTPDF-file-content")
+        self.assertIn("signature", ctx.exception.message.lower())
+
+    def test_corrupted_pdf_rejected(self):
+        with self.assertRaises(self.pdf_service.PdfDocumentError):
+            self.pdf_service.validate_pdf_bytes(b"%PDF-1.4\n%this-is-not-valid")
+
+    def test_oversized_upload_rejected(self):
+        huge = b"%PDF-1.4\n" + (b"x" * (256 * 1024))
+        with self.assertRaises(self.pdf_service.PdfDocumentError) as ctx:
+            self.pdf_service.validate_pdf_bytes(huge)
+        self.assertEqual(ctx.exception.status_code, 413)
+
+    def test_pdf_with_no_extractable_text(self):
+        record = self.pdf_service.build_document_record(
+            email="bob@example.edu",
+            original_filename="scan.pdf",
+            file_bytes=self._make_pdf_bytes(""),
+            subject="Scans",
+        )
+        self.assertEqual(record["status"], "processed_no_text")
+        self.assertFalse(record["text_available"])
+        self.assertTrue(record["ocr_required"])
+        self.assertIn("OCR", record["extraction_message"])
+
+    def test_unauthenticated_upload_rejected(self):
+        with self.assertRaises(self.pdf_service.PdfDocumentError) as ctx:
+            self.pdf_service.require_student_email("")
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        from fastapi import UploadFile
+        import io as _io
+        upload = UploadFile(filename="a.pdf", file=_io.BytesIO(self._make_pdf_bytes("x")))
+
+        async def _run():
+            return await self.documents_routes.upload_pdf_document(
+                file=upload,
+                email="   ",
+                subject="General",
+            )
+
+        with self.assertRaises(HTTPException) as ctx2:
+            asyncio_run(_run())
+        self.assertEqual(ctx2.exception.status_code, 401)
+
+    def test_ownership_isolation_list_get_delete(self):
+        record = self.pdf_service.build_document_record(
+            email="owner@example.edu",
+            original_filename="private.pdf",
+            file_bytes=self._make_pdf_bytes("secret notes"),
+        )
+        self.documents_routes._persist_record(record)
+        doc_id = record["document_id"]
+
+        other_list = self.documents_routes.list_documents(email="intruder@example.edu")
+        self.assertEqual(other_list["count"], 0)
+
+        with self.assertRaises(HTTPException) as ctx_get:
+            self.documents_routes.get_document_metadata(doc_id, email="intruder@example.edu")
+        self.assertEqual(ctx_get.exception.status_code, 404)
+
+        with self.assertRaises(HTTPException) as ctx_text:
+            self.documents_routes.get_document_extracted_text(doc_id, email="intruder@example.edu")
+        self.assertEqual(ctx_text.exception.status_code, 404)
+
+        with self.assertRaises(HTTPException) as ctx_del:
+            self.documents_routes.delete_document(doc_id, email="intruder@example.edu")
+        self.assertEqual(ctx_del.exception.status_code, 404)
+
+        # Owner can still access
+        meta = self.documents_routes.get_document_metadata(doc_id, email="owner@example.edu")
+        self.assertEqual(meta["document_id"], doc_id)
+
+    def test_metadata_persistence_and_deletion_cleanup(self):
+        from pathlib import Path
+
+        record = self.pdf_service.build_document_record(
+            email="cleanup@example.edu",
+            original_filename="to-delete.pdf",
+            file_bytes=self._make_pdf_bytes("delete me"),
+        )
+        self.documents_routes._persist_record(record)
+        doc_id = record["document_id"]
+        pdf_path = Path(self._tmpdir.name) / self.pdf_service.owner_storage_key("cleanup@example.edu") / f"{doc_id}.pdf"
+        self.assertTrue(pdf_path.exists())
+
+        deleted = self.documents_routes.delete_document(doc_id, email="cleanup@example.edu")
+        self.assertEqual(deleted["document_id"], doc_id)
+        self.assertFalse(pdf_path.exists())
+        self.assertIsNone(self.documents_routes._find_record(doc_id))
+
+        listed = self.documents_routes.list_documents(email="cleanup@example.edu")
+        self.assertEqual(listed["count"], 0)
+
+    def test_storage_failure_surfaces_safely(self):
+        with patch(
+            "app.services.pdf_document_service.save_pdf_bytes",
+            side_effect=OSError("disk full"),
+        ):
+            with self.assertRaises(Exception):
+                self.pdf_service.build_document_record(
+                    email="fail@example.edu",
+                    original_filename="x.pdf",
+                    file_bytes=self._make_pdf_bytes("data"),
+                )
+
+    def test_public_summary_hides_filesystem_paths(self):
+        record = self.pdf_service.build_document_record(
+            email="safe@example.edu",
+            original_filename="safe.pdf",
+            file_bytes=self._make_pdf_bytes("visible"),
+        )
+        summary = self.pdf_service.public_document_summary(record)
+        dumped = str(summary)
+        self.assertNotIn(self._tmpdir.name, dumped)
+        self.assertNotIn("storage_key", summary)
+        self.assertNotIn("pages", summary)
+
+
+def asyncio_run(coro):
+    import asyncio
+    return asyncio.run(coro)
 
 
 if __name__ == "__main__":

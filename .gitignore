@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 models/*.pkl
 models/*.joblib
+
+# M15 local PDF storage (never commit student uploads)
+backend/storage/
+storage/

@@ -7,6 +7,7 @@ import StudyPlanner from "./pages/StudyPlanner";
 import AiTutor from "./pages/AiTutor";
 import Dashboard from "./pages/Dashboard";
 import ProgressTracking from "./pages/ProgressTracking";
+import Documents from "./pages/Documents";
 import "./styles.css";
 
 function App() {
@@ -21,6 +22,7 @@ function App() {
           <Route path="/planner" element={<StudyPlanner />} />
           <Route path="/tutor" element={<AiTutor />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/documents" element={<Documents />} />
           <Route path="/progress" element={<ProgressTracking />} />
         </Routes>
       </div>
