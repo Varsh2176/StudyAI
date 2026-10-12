@@ -1,0 +1,84 @@
+/**
+ * StudyWise AI design tokens (--sw-* prefix).
+ * Phase 1 — no font CDN/import; stack uses system fonts only.
+ */
+:root {
+  --sw-primary: #5b2bb8;
+  --sw-primary-hover: #4a1f9a;
+  --sw-primary-soft: #ede7fa;
+  --sw-on-primary: #ffffff;
+
+  --sw-bg: #f4f1fb;
+  --sw-surface: #ffffff;
+  --sw-surface-muted: #faf8ff;
+  --sw-border: #e4def3;
+
+  --sw-text: #1e1b2e;
+  --sw-text-muted: #5c5875;
+
+  --sw-success: #15803d;
+  --sw-success-soft: #dcfce7;
+  --sw-warning: #b45309;
+  --sw-warning-soft: #fef3c7;
+  --sw-danger: #b91c1c;
+  --sw-danger-soft: #fee2e2;
+  --sw-info: #1d4ed8;
+  --sw-info-soft: #dbeafe;
+
+  --sw-subject-1: #7c3aed;
+  --sw-subject-1-soft: #ede9fe;
+  --sw-subject-2: #2563eb;
+  --sw-subject-2-soft: #dbeafe;
+  --sw-subject-3: #0f766e;
+  --sw-subject-3-soft: #ccfbf1;
+  --sw-subject-4: #c2410c;
+  --sw-subject-4-soft: #ffedd5;
+  --sw-subject-5: #be185d;
+  --sw-subject-5-soft: #fce7f3;
+  --sw-subject-6: #15803d;
+  --sw-subject-6-soft: #dcfce7;
+  --sw-subject-7: #a16207;
+  --sw-subject-7-soft: #fef9c3;
+  --sw-subject-8: #475569;
+  --sw-subject-8-soft: #e2e8f0;
+
+  --sw-font: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  --sw-text-xs: 0.75rem;
+  --sw-text-sm: 0.875rem;
+  --sw-text-base: 1rem;
+  --sw-text-lg: 1.125rem;
+  --sw-text-xl: 1.375rem;
+  --sw-text-2xl: 1.75rem;
+  --sw-weight-regular: 400;
+  --sw-weight-medium: 500;
+  --sw-weight-semibold: 600;
+  --sw-leading: 1.5;
+
+  --sw-space-1: 0.25rem;
+  --sw-space-2: 0.5rem;
+  --sw-space-3: 0.75rem;
+  --sw-space-4: 1rem;
+  --sw-space-5: 1.5rem;
+  --sw-space-6: 2rem;
+  --sw-space-7: 3rem;
+
+  --sw-radius-sm: 8px;
+  --sw-radius-md: 12px;
+  --sw-radius-lg: 16px;
+  --sw-radius-pill: 999px;
+
+  --sw-shadow-card: 0 1px 2px rgba(30, 27, 46, 0.05), 0 4px 14px rgba(91, 43, 184, 0.06);
+  --sw-shadow-hover: 0 2px 4px rgba(30, 27, 46, 0.06), 0 8px 22px rgba(91, 43, 184, 0.12);
+  --sw-focus-ring: 0 0 0 3px rgba(91, 43, 184, 0.35);
+  --sw-transition: 160ms ease;
+
+  --sw-sidebar-width: 248px;
+  --sw-header-height: 64px;
+  --sw-content-max: 1200px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --sw-transition: 0ms;
+  }
+}

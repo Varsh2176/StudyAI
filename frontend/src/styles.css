@@ -1,23 +1,32 @@
+/*
+  Legacy variable aliases → StudyWise tokens (--sw-*).
+  Safe 1:1 semantic mappings only (inventory audited in Phase 1).
+  --primary / --primary-hover / --primary-light → brand purple
+  --accent → primary (same brand family; was indigo/violet)
+  --success* / --warning* / --danger* → status tokens
+  --bg-main / --bg-card / --border / --text-* → surface & type
+  --font-sans / --radius / --shadow* → type & elevation
+*/
 :root {
-  --primary: #4f46e5;
-  --primary-hover: #4338ca;
-  --primary-light: #eef2ff;
-  --accent: #8b5cf6;
-  --success: #10b981;
-  --success-bg: #ecfdf5;
-  --warning: #f59e0b;
-  --warning-bg: #fffbeb;
-  --danger: #ef4444;
-  --danger-bg: #fef2f2;
-  --bg-main: #f8fafc;
-  --bg-card: #ffffff;
-  --border: #e2e8f0;
-  --text-main: #1e293b;
-  --text-muted: #64748b;
-  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --radius: 10px;
-  --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+  --primary: var(--sw-primary);
+  --primary-hover: var(--sw-primary-hover);
+  --primary-light: var(--sw-primary-soft);
+  --accent: var(--sw-primary);
+  --success: var(--sw-success);
+  --success-bg: var(--sw-success-soft);
+  --warning: var(--sw-warning);
+  --warning-bg: var(--sw-warning-soft);
+  --danger: var(--sw-danger);
+  --danger-bg: var(--sw-danger-soft);
+  --bg-main: var(--sw-bg);
+  --bg-card: var(--sw-surface);
+  --border: var(--sw-border);
+  --text-main: var(--sw-text);
+  --text-muted: var(--sw-text-muted);
+  --font-sans: var(--sw-font);
+  --radius: var(--sw-radius-md);
+  --shadow: var(--sw-shadow-card);
+  --shadow-lg: var(--sw-shadow-hover);
 }
 
 body {

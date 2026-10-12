@@ -1,36 +1,47 @@
 import { NavLink } from "react-router-dom";
 
-function Navbar() {
+/**
+ * App navigation links.
+ * Phase 1: used as the sidebar / drawer nav (variant="sidebar").
+ * Register stays on the auth layout, not in this list.
+ */
+const APP_LINKS = [
+  { to: "/dashboard", label: "Dashboard" },
+  { to: "/predict", label: "Predict" },
+  { to: "/planner", label: "Planner" },
+  { to: "/tutor", label: "AI Tutor" },
+  { to: "/documents", label: "Documents" },
+  { to: "/progress", label: "Progress" },
+  { to: "/profile", label: "Profile" },
+];
+
+function Navbar({ variant = "sidebar", onNavigate, navId = "sw-sidebar-nav" }) {
+  const isSidebar = variant === "sidebar";
+
   return (
-    <nav className="navbar">
-      <NavLink to="/" className="nav-brand">
-        <span>🎓</span> StudyWise AI
-      </NavLink>
+    <nav
+      className={isSidebar ? "navbar navbar-sidebar" : "navbar"}
+      aria-label="Main"
+      id={navId}
+    >
+      {!isSidebar && (
+        <NavLink to="/dashboard" className="nav-brand">
+          StudyWise AI
+        </NavLink>
+      )}
       <div className="nav-links">
-        <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Register
-        </NavLink>
-        <NavLink to="/profile" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Profile
-        </NavLink>
-        <NavLink to="/predict" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Predict Score & Risk
-        </NavLink>
-        <NavLink to="/planner" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Study Planner
-        </NavLink>
-        <NavLink to="/tutor" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          AI Tutor
-        </NavLink>
-        <NavLink to="/dashboard" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Dashboard
-        </NavLink>
-        <NavLink to="/documents" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Materials
-        </NavLink>
-        <NavLink to="/progress" className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-          Progress
-        </NavLink>
+        {APP_LINKS.map((link) => (
+          <NavLink
+            key={link.to}
+            to={link.to}
+            className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            onClick={() => {
+              if (typeof onNavigate === "function") onNavigate();
+            }}
+          >
+            {link.label}
+          </NavLink>
+        ))}
       </div>
     </nav>
   );
