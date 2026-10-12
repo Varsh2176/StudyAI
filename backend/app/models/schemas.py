@@ -134,23 +134,87 @@ class StudyPlanResponse(BaseModel):
     disclaimer: Optional[str] = None
 
 
-# Progress & Quiz Schemas (Phase G)
+# Progress & Quiz Schemas (M17)
 class StudySessionLog(BaseModel):
-    email: str
-    subject: str
-    topic: str
-    duration_minutes: int = Field(..., ge=1, le=600)
-    completed: bool = True
-    date: Optional[str] = None
+    """
+    Log a study session outcome for progress tracking.
+    status: completed | partial | missed
+    planned_minutes vs actual_minutes supports planned-versus-actual reporting.
+    duration_minutes / completed remain accepted for backward compatibility.
+    """
+    email: str = Field(..., min_length=3, max_length=254)
+    subject: str = Field(..., min_length=1, max_length=120)
+    topic: str = Field(default="", max_length=200)
+    status: Literal["completed", "partial", "missed"] = "completed"
+    planned_minutes: int = Field(default=50, ge=1, le=600)
+    actual_minutes: Optional[int] = Field(default=None, ge=0, le=600)
+    duration_minutes: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=600,
+        description="Legacy alias for actual_minutes when status is completed/partial",
+    )
+    completed: Optional[bool] = Field(
+        default=None,
+        description="Legacy flag; mapped to status when status is omitted by older clients",
+    )
+    date: Optional[str] = Field(default=None, description="Session date YYYY-MM-DD")
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        email = (value or "").strip().lower()
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise ValueError("A valid student email is required.")
+        return email
+
+    @field_validator("subject", "topic")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return (value or "").strip()
 
 
 class QuizScoreLog(BaseModel):
-    email: str
-    subject: str
-    quiz_title: str
+    email: str = Field(..., min_length=3, max_length=254)
+    subject: str = Field(..., min_length=1, max_length=120)
+    quiz_title: str = Field(..., min_length=1, max_length=200)
     score: float = Field(..., ge=0)
     total_marks: float = Field(default=100.0, gt=0)
-    date: Optional[str] = None
+    date: Optional[str] = Field(default=None, description="Quiz date YYYY-MM-DD")
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        email = (value or "").strip().lower()
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise ValueError("A valid student email is required.")
+        return email
+
+
+class AdaptPlanRequest(BaseModel):
+    """M18 — Adapt the stored study plan from logged progress (email-scoped)."""
+    email: str = Field(..., min_length=3, max_length=254)
+    daily_available_hours: Optional[float] = Field(
+        default=None,
+        ge=0.5,
+        le=16.0,
+        description="Optional override for available daily study hours (never raises above original plan daily hours)",
+    )
+    days_to_plan: Optional[int] = Field(default=None, ge=1, le=30)
+    plan_date: Optional[str] = Field(
+        default=None,
+        description="Optional YYYY-MM-DD start for the adapted horizon (default: tomorrow)",
+    )
+    max_daily_limit: Optional[float] = Field(default=None, ge=2.0, le=12.0)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        email = (value or "").strip().lower()
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise ValueError("A valid student email is required.")
+        return email
 
 
 # AI Notes & Q&A Schemas (Phase F / M15–M16 RAG path)
@@ -205,6 +269,45 @@ class TutorChatResponse(BaseModel):
     configured: bool = True
     profile_context_used: bool = False
     disclaimer: str
+
+
+# M16 — RAG over uploaded study documents
+class RagAskRequest(BaseModel):
+    email: str = Field(..., min_length=3, description="Student email that owns the documents")
+    question: str = Field(..., min_length=1, max_length=2000)
+    document_id: Optional[str] = Field(
+        default=None,
+        description="Optional specific document ID; omit to search all indexed owned documents",
+    )
+    top_k: int = Field(default=4, ge=1, le=10)
+
+    @field_validator("question")
+    @classmethod
+    def validate_rag_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Question cannot be empty.")
+        return cleaned
+
+
+class RagSourceCitation(BaseModel):
+    document_id: str
+    filename: str
+    page: int
+    chunk_id: str
+    snippet: str
+    similarity_score: float
+
+
+class RagAskResponse(BaseModel):
+    answer: str
+    grounded: bool
+    mode: Literal["llm", "retrieval_only", "no_results"]
+    sources: List[RagSourceCitation]
+    provider: Optional[str] = None
+    model_used: Optional[str] = None
+    retrieved_count: int = 0
+    document_scope: str
 
 
 # Study-Hour Recommendation Schemas (Milestone 10)

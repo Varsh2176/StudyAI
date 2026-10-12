@@ -1,199 +1,358 @@
-from datetime import datetime
-from collections import defaultdict
-from fastapi import APIRouter, HTTPException, Body
-from app.models.schemas import StudySessionLog, QuizScoreLog
-from app.services.scheduler import generate_study_plan
+"""
+M17/M18 — Progress tracking and adaptive planning routes.
+
+Sessions and quizzes persist in MongoDB only. When Mongo is unavailable,
+endpoints return 503 with a clear message (no silent in-memory success).
+All reads/writes are scoped to the student email in the request.
+
+Identity limitation: the app uses student email as the ownership key (no JWT).
+Endpoints filter strictly by that email but do not cryptographically verify identity.
+"""
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException
+
 from app.database.mongodb import (
-    sessions_collection,
     quizzes_collection,
-    study_plans_collection
+    sessions_collection,
+    study_plans_collection,
+)
+from app.models.schemas import AdaptPlanRequest, QuizScoreLog, StudySessionLog
+from app.services.adaptive_planning_service import (
+    AdaptivePlanningError,
+    adapt_plan_from_progress,
+)
+from app.services.progress_service import (
+    ProgressError,
+    build_progress_summary,
+    normalize_student_email,
+    resolve_session_fields,
+    validate_session_date,
 )
 
 router = APIRouter(prefix="/performance", tags=["Progress & Performance Tracking"])
 
 
+def _require_sessions_collection():
+    if sessions_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Progress storage is unavailable because MongoDB is not connected. "
+                "Session data is not kept in memory. Check /health/database."
+            ),
+        )
+
+
+def _require_quizzes_collection():
+    if quizzes_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Quiz storage is unavailable because MongoDB is not connected. "
+                "Check /health/database."
+            ),
+        )
+
+
+def _http_from_progress_error(exc: ProgressError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.message)
+
+
 @router.post("/session")
 def log_study_session(session: StudySessionLog):
-    """Logs a completed or scheduled study session."""
-    data = session.model_dump()
-    data["logged_at"] = datetime.utcnow().isoformat()
-    if not data.get("date"):
-        data["date"] = datetime.utcnow().strftime("%Y-%m-%d")
+    """
+    Create a study session progress record for the owning student email.
+    status: completed | partial | missed. Tracks planned vs actual minutes.
+    """
+    _require_sessions_collection()
 
-    if sessions_collection is not None:
-        try:
-            sessions_collection.insert_one(data)
-        except Exception as e:
-            print(f"Error logging session: {e}")
+    try:
+        record = resolve_session_fields(session.model_dump())
+    except ProgressError as exc:
+        raise _http_from_progress_error(exc) from exc
 
-    return {"message": "Study session logged successfully", "session": session}
+    try:
+        sessions_collection.insert_one(dict(record))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not save study session because MongoDB is unreachable. "
+                f"({type(exc).__name__}). Check /health/database."
+            ),
+        ) from exc
+
+    safe = {k: v for k, v in record.items() if k != "_id"}
+    return {
+        "message": "Study session logged successfully",
+        "persistence": "mongo",
+        "session": safe,
+    }
+
+
+@router.get("/{email}/sessions")
+def list_study_sessions(
+    email: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+):
+    """List study sessions owned by the given student email."""
+    _require_sessions_collection()
+
+    try:
+        owner = normalize_student_email(email)
+    except ProgressError as exc:
+        raise _http_from_progress_error(exc) from exc
+
+    try:
+        limit_n = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="limit must be an integer.") from exc
+    if limit_n < 1 or limit_n > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+
+    query = {"email": owner}
+    if status:
+        status_norm = status.strip().lower()
+        if status_norm not in {"completed", "partial", "missed"}:
+            raise HTTPException(
+                status_code=400,
+                detail="status filter must be completed, partial, or missed.",
+            )
+        query["status"] = status_norm
+
+    try:
+        cursor = (
+            sessions_collection.find(query, {"_id": 0})
+            .sort([("date", -1), ("logged_at", -1)])
+            .limit(limit_n)
+        )
+        sessions = list(cursor)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not load study sessions because MongoDB is unreachable. "
+                f"({type(exc).__name__}). Check /health/database."
+            ),
+        ) from exc
+
+    # Defense in depth — never return another student's rows
+    sessions = [s for s in sessions if (s.get("email") or "").lower() == owner]
+
+    return {
+        "email": owner,
+        "count": len(sessions),
+        "sessions": sessions,
+        "persistence": "mongo",
+        "empty": len(sessions) == 0,
+    }
 
 
 @router.post("/quiz")
 def log_quiz_score(quiz: QuizScoreLog):
-    """Records a subject quiz score to evaluate learning progress."""
+    """Records a subject quiz score owned by the student email."""
+    _require_quizzes_collection()
+
+    try:
+        owner = normalize_student_email(quiz.email)
+        quiz_date = validate_session_date(quiz.date)
+    except ProgressError as exc:
+        raise _http_from_progress_error(exc) from exc
+
+    if quiz.score > quiz.total_marks:
+        raise HTTPException(
+            status_code=400,
+            detail="score cannot be greater than total_marks.",
+        )
+
     data = quiz.model_dump()
-    data["logged_at"] = datetime.utcnow().isoformat()
-    if not data.get("date"):
-        data["date"] = datetime.utcnow().strftime("%Y-%m-%d")
+    data["email"] = owner
+    data["date"] = quiz_date
+    data["logged_at"] = datetime.now(timezone.utc).isoformat()
     data["percentage"] = round((quiz.score / quiz.total_marks) * 100.0, 1)
+    data["persistence"] = "mongo"
 
-    if quizzes_collection is not None:
-        try:
-            quizzes_collection.insert_one(data)
-        except Exception as e:
-            print(f"Error logging quiz: {e}")
+    try:
+        quizzes_collection.insert_one(dict(data))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not save quiz score because MongoDB is unreachable. "
+                f"({type(exc).__name__}). Check /health/database."
+            ),
+        ) from exc
 
-    return {"message": "Quiz result recorded successfully", "percentage": data["percentage"]}
+    return {
+        "message": "Quiz result recorded successfully",
+        "percentage": data["percentage"],
+        "persistence": "mongo",
+        "email": owner,
+    }
 
 
 @router.get("/{email}")
 def get_performance_summary(email: str):
     """
-    Aggregates student performance metrics:
-    - Total study hours and sessions
-    - Subject-wise hours and average quiz scores
-    - Recent quiz history for progress visualization
+    Aggregates student progress for the owning email only:
+    - Completed / partial / missed session counts
+    - Planned versus actual study hours
+    - Subject-wise progress and completion rates
     """
-    sessions = []
+    _require_sessions_collection()
+
+    try:
+        owner = normalize_student_email(email)
+    except ProgressError as exc:
+        raise _http_from_progress_error(exc) from exc
+
+    try:
+        sessions = list(sessions_collection.find({"email": owner}, {"_id": 0}))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not load progress because MongoDB is unreachable. "
+                f"({type(exc).__name__}). Check /health/database."
+            ),
+        ) from exc
+
     quizzes = []
-
-    if sessions_collection is not None:
-        try:
-            sessions = list(sessions_collection.find({"email": email}, {"_id": 0}))
-        except Exception:
-            pass
-
     if quizzes_collection is not None:
         try:
-            quizzes = list(quizzes_collection.find({"email": email}, {"_id": 0}))
-        except Exception:
-            pass
+            quizzes = list(quizzes_collection.find({"email": owner}, {"_id": 0}))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not load quiz history because MongoDB is unreachable. "
+                    f"({type(exc).__name__}). Check /health/database."
+                ),
+            ) from exc
 
-    total_study_minutes = sum(s.get("duration_minutes", 0) for s in sessions if s.get("completed", True))
-    total_hours = round(total_study_minutes / 60.0, 1)
-
-    # Subject-wise study hours
-    subject_hours = defaultdict(float)
-    for s in sessions:
-        if s.get("completed", True):
-            subj = s.get("subject", "General")
-            subject_hours[subj] += s.get("duration_minutes", 0) / 60.0
-
-    # Subject-wise quiz average
-    subject_quizzes = defaultdict(list)
-    for q in quizzes:
-        subj = q.get("subject", "General")
-        pct = q.get("percentage") or (q.get("score", 0) / q.get("total_marks", 100) * 100.0)
-        subject_quizzes[subj].append(pct)
-
-    subject_metrics = []
-    all_subjects = set(subject_hours.keys()).union(set(subject_quizzes.keys()))
-    for subj in sorted(all_subjects):
-        hours = round(subject_hours.get(subj, 0.0), 1)
-        quiz_list = subject_quizzes.get(subj, [])
-        avg_score = round(sum(quiz_list) / len(quiz_list), 1) if quiz_list else None
-
-        subject_metrics.append({
-            "subject": subj,
-            "hours_studied": hours,
-            "average_quiz_score": avg_score,
-            "total_quizzes": len(quiz_list)
-        })
-
-    overall_avg_quiz = (
-        round(sum(q.get("percentage", 0) for q in quizzes) / len(quizzes), 1)
-        if quizzes else None
-    )
-
-    return {
-        "email": email,
-        "total_study_hours": total_hours,
-        "total_completed_sessions": len([s for s in sessions if s.get("completed", True)]),
-        "overall_average_quiz_score": overall_avg_quiz,
-        "subject_metrics": subject_metrics,
-        "recent_quizzes": quizzes[-10:],
-        "recent_sessions": sessions[-10:]
-    }
+    return build_progress_summary(email=owner, sessions=sessions, quizzes=quizzes)
 
 
 @router.post("/adapt-plan")
-def adapt_study_plan(email: str = Body(..., embed=True)):
+def adapt_study_plan(request: AdaptPlanRequest):
     """
-    Adapts future study schedules based on newly collected quiz and session data.
-    Automatically identifies weak subjects (< 70% quiz average) and boosts their allocation.
+    M18: Adapt the stored study plan from M17 session progress (and quizzes).
+    Reschedules unfinished work into a future horizon without exceeding daily limits.
+    Repeat-safe: identical progress does not increase workload again.
+    Historical session records are never modified or deleted.
     """
     if study_plans_collection is None:
-        raise HTTPException(status_code=500, detail="Database unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Study plan storage is unavailable because MongoDB is not connected. "
+                "Check /health/database."
+            ),
+        )
+    _require_sessions_collection()
 
-    plan_doc = study_plans_collection.find_one({"email": email})
+    try:
+        owner = normalize_student_email(request.email)
+    except ProgressError as exc:
+        raise _http_from_progress_error(exc) from exc
+
+    try:
+        plan_doc = study_plans_collection.find_one({"email": owner})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not load study plan because MongoDB is unreachable. "
+                f"({type(exc).__name__}). Check /health/database."
+            ),
+        ) from exc
+
     if not plan_doc or "plan" not in plan_doc:
-        raise HTTPException(status_code=404, detail="No existing study plan to adapt. Please generate a plan first.")
+        raise HTTPException(
+            status_code=404,
+            detail="No existing study plan to adapt. Please generate a plan first.",
+        )
 
-    current_plan = plan_doc["plan"]
-    subjects = current_plan.get("subjects_weighted", [])
+    try:
+        sessions = list(sessions_collection.find({"email": owner}, {"_id": 0}))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not load study sessions because MongoDB is unreachable. "
+                f"({type(exc).__name__}). Check /health/database."
+            ),
+        ) from exc
 
-    # Fetch recent quizzes
     quizzes = []
     if quizzes_collection is not None:
-        quizzes = list(quizzes_collection.find({"email": email}))
+        try:
+            quizzes = list(quizzes_collection.find({"email": owner}, {"_id": 0}))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not load quizzes because MongoDB is unreachable. "
+                    f"({type(exc).__name__}). Check /health/database."
+                ),
+            ) from exc
 
-    quiz_scores_by_subject = defaultdict(list)
-    for q in quizzes:
-        pct = q.get("percentage") or (q.get("score", 0) / q.get("total_marks", 100) * 100.0)
-        quiz_scores_by_subject[q.get("subject")].append(pct)
+    try:
+        result = adapt_plan_from_progress(
+            email=owner,
+            plan_document=plan_doc,
+            sessions=sessions,
+            quizzes=quizzes,
+            daily_available_hours=request.daily_available_hours,
+            days_to_plan=request.days_to_plan,
+            plan_date=request.plan_date,
+            max_daily_limit=request.max_daily_limit,
+        )
+    except AdaptivePlanningError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except ProgressError as exc:
+        raise _http_from_progress_error(exc) from exc
 
-    adapted_subjects = []
-    adaptations_made = []
+    if result.get("unchanged"):
+        return result
 
-    for subj in subjects:
-        subj_name = subj["name"]
-        recent_scores = quiz_scores_by_subject.get(subj_name, [])
-        new_difficulty = subj.get("difficulty", "Medium")
-        new_current = subj.get("current_score", 60.0)
-
-        if recent_scores:
-            avg_quiz = sum(recent_scores) / len(recent_scores)
-            new_current = round(avg_quiz, 1)
-
-            if avg_quiz < 70.0:
-                new_difficulty = "High"
-                adaptations_made.append(
-                    f"Increased priority for '{subj_name}': Average quiz is {avg_quiz:.1f}% (below 70%)."
-                )
-            elif avg_quiz >= 85.0:
-                new_difficulty = "Low"
-                adaptations_made.append(
-                    f"Relaxed priority for '{subj_name}': Strong quiz performance of {avg_quiz:.1f}%."
-                )
-
-        adapted_subjects.append({
-            "name": subj_name,
-            "difficulty": new_difficulty,
-            "current_score": new_current,
-            "target_score": subj.get("target_score", 85.0),
-            "exam_date": subj.get("exam_date")
-        })
-
-    # Regenerate schedule with adapted parameters
-    new_plan = generate_study_plan(
-        subjects=adapted_subjects,
-        daily_study_hours=current_plan.get("daily_study_hours", 4.0),
-        days_to_plan=current_plan.get("days_planned", 7)
-    )
-
-    # Save adapted plan
-    study_plans_collection.update_one(
-        {"email": email},
-        {"$set": {
-            "plan": new_plan,
-            "adapted_at": datetime.utcnow().isoformat(),
-            "adaptation_notes": adaptations_made
-        }}
-    )
-
-    return {
-        "message": "Study plan successfully adapted based on latest performance metrics",
-        "adaptations": adaptations_made or ["Current study weights remain optimal."],
-        "adapted_plan": new_plan
+    history_entry = {
+        "adapted_at": result["adapted_at"],
+        "adaptation_fingerprint": result["adaptation_fingerprint"],
+        "adaptations": result.get("adaptations") or [],
     }
+    prior_history = list(plan_doc.get("adaptation_history") or [])
+    prior_history.append(history_entry)
+    prior_history = prior_history[-20:]
+
+    try:
+        study_plans_collection.update_one(
+            {"email": owner},
+            {
+                "$set": {
+                    "email": owner,
+                    "plan": result["adapted_plan"],
+                    "adapted_at": result["adapted_at"],
+                    "adaptation_notes": result.get("adaptations") or [],
+                    "adaptation_fingerprint": result["adaptation_fingerprint"],
+                    "adaptation_history": prior_history,
+                    "declared_daily_study_hours": result.get("declared_daily_study_hours"),
+                    "declared_days_to_plan": result.get("declared_days_to_plan"),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not save adapted plan because MongoDB is unreachable. "
+                f"({type(exc).__name__}). Check /health/database."
+            ),
+        ) from exc
+
+    return result

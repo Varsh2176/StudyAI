@@ -336,6 +336,9 @@ def public_document_summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "extraction_message": record.get("extraction_message"),
         "uploaded_at": record.get("uploaded_at"),
         "updated_at": record.get("updated_at"),
+        "rag_status": record.get("rag_status") or "not_indexed",
+        "rag_chunk_count": record.get("rag_chunk_count") or 0,
+        "rag_indexed_at": record.get("rag_indexed_at"),
     }
 
 

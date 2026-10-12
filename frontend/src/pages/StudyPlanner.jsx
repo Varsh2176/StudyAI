@@ -13,8 +13,11 @@ function StudyPlanner() {
   ]);
 
   const [loading, setLoading] = useState(false);
+  const [adapting, setAdapting] = useState(false);
   const [plan, setPlan] = useState(null);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [adaptations, setAdaptations] = useState([]);
   const [activeTab, setActiveTab] = useState("daily"); // "daily" or "weekly"
 
   useEffect(() => {
@@ -85,6 +88,8 @@ function StudyPlanner() {
   const handleGeneratePlan = async (e) => {
     e.preventDefault();
     setError("");
+    setSuccess("");
+    setAdaptations([]);
     setLoading(true);
 
     try {
@@ -93,6 +98,10 @@ function StudyPlanner() {
         setError("Please enter at least one subject.");
         setLoading(false);
         return;
+      }
+
+      if (email) {
+        localStorage.setItem("student_email", email.trim());
       }
 
       const res = await API.post("/study-plan/generate", {
@@ -109,11 +118,56 @@ function StudyPlanner() {
       });
 
       setPlan(res.data);
+      setSuccess("Study plan generated successfully.");
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.detail || "Failed to generate study plan.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAdaptFromProgress = async () => {
+    setError("");
+    setSuccess("");
+    setAdaptations([]);
+
+    const trimmed = (email || "").trim();
+    if (!trimmed) {
+      setError("Enter your student email so adaptation can load your progress and saved plan.");
+      return;
+    }
+
+    setAdapting(true);
+    try {
+      localStorage.setItem("student_email", trimmed);
+      const res = await API.post("/performance/adapt-plan", {
+        email: trimmed,
+        daily_available_hours: Number(dailyHours) || undefined,
+        days_to_plan: Number(daysToPlan) || undefined,
+      });
+
+      if (res.data?.adapted_plan) {
+        setPlan(res.data.adapted_plan);
+      }
+      setAdaptations(res.data?.adaptations || []);
+      if (res.data?.unchanged) {
+        setSuccess(res.data.message || "Plan unchanged — no new progress to adapt.");
+      } else {
+        setSuccess(res.data?.message || "Plan adapted from your logged progress.");
+      }
+    } catch (err) {
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+      if (status === 404) {
+        setError(detail || "No saved plan found. Generate a plan first, then adapt.");
+      } else if (status === 503) {
+        setError(detail || "Database unavailable. Check /health/database.");
+      } else {
+        setError(detail || "Failed to adapt study plan from progress.");
+      }
+    } finally {
+      setAdapting(false);
     }
   };
 
@@ -156,18 +210,51 @@ function StudyPlanner() {
       </div>
 
       {error && <div className="alert alert-danger">{error}</div>}
+      {success && <div className="alert alert-success">{success}</div>}
+
+      {adaptations.length > 0 && (
+        <div className="card" style={{ borderLeft: "4px solid var(--accent)" }}>
+          <h3 style={{ margin: "0 0 0.5rem 0" }}>Why the plan changed</h3>
+          <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+            {adaptations.map((note, i) => (
+              <li key={i}>{note}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: "0.75rem" }}>
           <h2 className="card-title" style={{ margin: 0 }}>Plan Parameters & Subjects</h2>
-          {email && (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={importFromProfile}>
-              Import Subjects from Profile
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {email && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={importFromProfile}>
+                Import Subjects from Profile
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleAdaptFromProgress}
+              disabled={adapting || loading}
+            >
+              {adapting ? "Adapting..." : "Adapt from Progress"}
             </button>
-          )}
+          </div>
         </div>
 
         <form onSubmit={handleGeneratePlan}>
+          <div className="form-group" style={{ marginBottom: "1rem" }}>
+            <label htmlFor="planner-email">Student email (required to save / adapt)</label>
+            <input
+              id="planner-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@college.edu"
+            />
+          </div>
+
           <div className="form-grid" style={{ marginBottom: "1.5rem" }}>
             <div className="form-group">
               <label>Daily Study Availability (Hours)</label>

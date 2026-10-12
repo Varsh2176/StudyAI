@@ -6,6 +6,6 @@ __pycache__/
 models/*.pkl
 models/*.joblib
 
-# M15 local PDF storage (never commit student uploads)
+# M15/M16 local PDF + RAG index storage (never commit student uploads/indexes)
 backend/storage/
 storage/

@@ -83,13 +83,28 @@ This prevents data leakage from final exam outcomes while delivering clear, acti
 
 ---
 
-## 5. Grounded AI Tutor & Notes RAG (Phase F)
+## 5. Grounded AI Tutor & Notes RAG (M14–M16)
 
-1. **Document Ingestion**: Accepts PDF or plain-text lecture notes with validation (format check, max 20MB).
-2. **Text Extraction & Chunking**: Uses `pypdf` to extract text page-by-page and segments into overlapping windows (150 words, 30-word overlap) preserving source page numbers.
-3. **Similarity Retrieval**: Uses TF-IDF cosine similarity to rank passages against student queries.
-4. **Knowledge Boundary Enforcement**: When similarity fails to meet the relevance threshold, the tutor explicitly replies: *"This information is not available in your uploaded study notes."*
-5. **Modular Architecture**: Works 100% offline using grounded passage extraction and citations. If a `GEMINI_API_KEY` is provided in the environment, it uses generative conversational synthesis without compromising offline fallback.
+1. **Document Ingestion (M15)**: `POST /documents/upload` accepts PDF notes (size limit via `PDF_UPLOAD_MAX_BYTES`). Text is extracted with `pypdf` and owned by student email.
+2. **Indexing (M16)**: `POST /documents/{id}/index?email=...` chunks pages (default 150 words, 30-word overlap), builds a local TF-IDF index, and persists it under `RAG_STORAGE_DIR` (`storage/rag/`). Re-index is skipped when the content hash is unchanged.
+3. **Ask (M16)**: `POST /documents/rag/ask` retrieves top-k owned chunks by cosine similarity, then answers with Gemini when `GEMINI_API_KEY` is set, or a labelled **retrieval-only** mode otherwise. Responses include filename/page citations.
+4. **Ownership**: Retrieval and index paths are scoped to the requesting email; cross-user access is rejected.
+5. **UI**: Materials / Dashboard `PdfDocumentsPanel` supports Index, status badges, and Ask Your Notes (RAG).
+
+### Progress Tracking (M17)
+
+- `POST /performance/session` — log completed / partial / missed sessions with planned vs actual minutes (MongoDB only; 503 if DB down).
+- `GET /performance/{email}` — progress summary (completion rates, planned vs actual hours, subject-wise metrics).
+- `GET /performance/{email}/sessions` — list owned sessions.
+- Frontend: `/progress` page with load/empty/error states and session logging forms.
+- All queries are scoped to the student email; no in-memory permanent progress store.
+
+### Adaptive Planning (M18)
+
+- `POST /performance/adapt-plan` adapts the saved study plan from logged sessions (missed / partial / completed), planned-vs-actual time, quizzes, exam dates, and available hours.
+- Uses the existing M11 scheduler; unfinished work raises subject priority within a capped share of future capacity (does not create unrealistic catch-up load).
+- Repeat-safe via progress fingerprint: identical progress does not increase workload again.
+- Historical session records are never modified. Email scoping matches the rest of the app (email is not cryptographic identity).
 
 ---
 
@@ -114,12 +129,15 @@ This prevents data leakage from final exam outcomes while delivering clear, acti
    ```bash
    cp .env.example .env
    ```
-   Edit `.env`:
+   Edit `.env` (see `backend/.env.example` for full names):
    ```ini
    MONGODB_URI=your_mongodb_connection_string
    DATABASE_NAME=studyai
    GEMINI_API_KEY=optional_gemini_api_key
+   RAG_STORAGE_DIR=storage/rag
+   RAG_EMBEDDING_PROVIDER=local_tfidf
    ```
+   No Atlas Vector Search index is required for M16; embeddings use scikit-learn TF-IDF on disk.
 4. Train the ML model pipeline (if not already generated):
    ```bash
    python ../ml/src/train_model.py

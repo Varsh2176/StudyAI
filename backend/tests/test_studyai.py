@@ -15,6 +15,9 @@ from app.models.schemas import (
     StudyPlanResponse,
     TutorChatRequest,
     TutorChatResponse,
+    RagAskRequest,
+    StudySessionLog,
+    AdaptPlanRequest,
 )
 from app.routes.prediction import predict_score_endpoint
 from app.routes.study_plan import (
@@ -513,6 +516,12 @@ class TestPreservedBackendRoutes(unittest.TestCase):
         self.assertIn("/documents", paths)
         self.assertIn("/documents/{document_id}", paths)
         self.assertIn("/documents/{document_id}/text", paths)
+        self.assertIn("/documents/{document_id}/index", paths)
+        self.assertIn("/documents/{document_id}/index-status", paths)
+        self.assertIn("/documents/rag/ask", paths)
+        self.assertIn("/performance/session", paths)
+        self.assertIn("/performance/{email}", paths)
+        self.assertIn("/performance/{email}/sessions", paths)
         self.assertIn("/health", paths)
         self.assertIn("/health/database", paths)
 
@@ -1368,5 +1377,684 @@ def asyncio_run(coro):
     return asyncio.run(coro)
 
 
+class TestDocumentRagM16(unittest.TestCase):
+    """M16 RAG over uploaded study documents (local TF-IDF index; LLM mocked)."""
+
+    def setUp(self):
+        import tempfile
+        from app.routes import documents as documents_routes
+        from app.services import document_rag_service as rag_service
+        from app.services import pdf_document_service as pdf_service
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._env_patch = patch.dict(
+            "os.environ",
+            {
+                "PDF_STORAGE_DIR": str(__import__("pathlib").Path(self._tmpdir.name) / "docs"),
+                "RAG_STORAGE_DIR": str(__import__("pathlib").Path(self._tmpdir.name) / "rag"),
+                "PDF_UPLOAD_MAX_BYTES": str(512 * 1024),
+                "GEMINI_API_KEY": "",
+                "GOOGLE_API_KEY": "",
+            },
+            clear=False,
+        )
+        self._env_patch.start()
+        self._mongo_patch = patch.object(documents_routes, "documents_collection", None)
+        self._mongo_patch.start()
+        documents_routes._documents_cache.clear()
+        self.addCleanup(self._mongo_patch.stop)
+        self.addCleanup(self._env_patch.stop)
+        self.addCleanup(self._tmpdir.cleanup)
+        self.addCleanup(documents_routes._documents_cache.clear)
+        self.documents_routes = documents_routes
+        self.rag_service = rag_service
+        self.pdf_service = pdf_service
+
+    @staticmethod
+    def _make_pdf_bytes(text: str = "Hello World") -> bytes:
+        safe = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream = f"BT /F1 12 Tf 10 50 Td ({safe}) Tj ET\n".encode("latin-1")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            (
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] "
+                b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
+            ),
+            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"endstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]
+        out = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for i, obj in enumerate(objects, start=1):
+            offsets.append(len(out))
+            out.extend(f"{i} 0 obj\n".encode("ascii"))
+            out.extend(obj)
+            out.extend(b"\nendobj\n")
+        xref_pos = len(out)
+        out.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+        out.extend(b"0000000000 65535 f \n")
+        for off in offsets[1:]:
+            out.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+        out.extend(
+            f"trailer<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
+        )
+        return bytes(out)
+
+    def _build_record(self, email="alice@example.edu", text="Gradient descent minimizes the loss function"):
+        return self.pdf_service.build_document_record(
+            email=email,
+            original_filename="ml-notes.pdf",
+            file_bytes=self._make_pdf_bytes(text),
+            subject="ML",
+        )
+
+    def test_chunking_preserves_metadata(self):
+        pages = [
+            {"page": 1, "text": " ".join(["alpha"] * 40)},
+            {"page": 2, "text": " ".join(["beta"] * 40)},
+        ]
+        chunks = self.rag_service.chunk_pages_for_rag(
+            pages,
+            document_id="doc-12345678",
+            email="alice@example.edu",
+            filename="notes.pdf",
+            chunk_size=20,
+            chunk_overlap=5,
+        )
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(c["document_id"] == "doc-12345678" for c in chunks))
+        self.assertTrue(all(c["email"] == "alice@example.edu" for c in chunks))
+        self.assertTrue(all(c["filename"] == "notes.pdf" for c in chunks))
+        self.assertTrue(all("page" in c and "chunk_index" in c for c in chunks))
+
+    def test_empty_extracted_text_rejected(self):
+        with self.assertRaises(self.rag_service.DocumentRagError):
+            self.rag_service.index_document_record({
+                "document_id": "doc-empty01",
+                "email": "alice@example.edu",
+                "filename": "empty.pdf",
+                "text_available": False,
+                "pages": [],
+            })
+
+    def test_index_retrieve_and_citations(self):
+        record = self._build_record()
+        self.documents_routes._persist_record(record)
+        info = self.rag_service.index_document_record(record)
+        self.assertEqual(info["status"], "indexed")
+        self.assertTrue(info["persistent"])
+        self.assertEqual(info["storage"], "disk")
+        self.assertGreater(info["chunk_count"], 0)
+
+        # Skip rebuild when unchanged
+        again = self.rag_service.index_document_record(record, force=False)
+        self.assertFalse(again["rebuilt"])
+
+        hits = self.rag_service.retrieve_from_document(
+            email="alice@example.edu",
+            document_id=record["document_id"],
+            question="What is gradient descent?",
+            top_k=3,
+            threshold=0.0,
+        )
+        self.assertGreater(len(hits), 0)
+        self.assertEqual(hits[0]["filename"], "ml-notes.pdf")
+        self.assertEqual(hits[0]["page"], 1)
+
+        with patch(
+            "app.services.document_rag_service.generate_rag_answer",
+            wraps=self.rag_service.generate_rag_answer,
+        ):
+            result = self.rag_service.generate_rag_answer(
+                question="What is gradient descent?",
+                retrieved=hits,
+            )
+        self.assertTrue(result["grounded"])
+        self.assertEqual(result["mode"], "retrieval_only")  # no Gemini key in tests
+        self.assertGreater(len(result["sources"]), 0)
+        self.assertEqual(result["sources"][0]["page"], 1)
+
+    def test_ownership_blocks_cross_user_retrieval(self):
+        record = self._build_record(email="owner@example.edu")
+        self.rag_service.index_document_record(record)
+        with self.assertRaises(self.rag_service.DocumentRagError) as ctx:
+            self.rag_service.retrieve_from_document(
+                email="intruder@example.edu",
+                document_id=record["document_id"],
+                question="gradient descent",
+            )
+        self.assertIn(ctx.exception.status_code, (404, 409))
+
+        with self.assertRaises(HTTPException) as http_ctx:
+            self.documents_routes.ask_documents_rag(
+                RagAskRequest(
+                    email="intruder@example.edu",
+                    question="gradient descent",
+                    document_id=record["document_id"],
+                )
+            )
+        self.assertEqual(http_ctx.exception.status_code, 404)
+
+    def test_unindexed_document_ask_rejected(self):
+        record = self._build_record()
+        self.documents_routes._persist_record(record)
+        with self.assertRaises(HTTPException) as ctx:
+            self.documents_routes.ask_documents_rag(
+                RagAskRequest(
+                    email="alice@example.edu",
+                    question="What is in the notes?",
+                    document_id=record["document_id"],
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_no_relevant_results_mode(self):
+        result = self.rag_service.generate_rag_answer(question="anything", retrieved=[])
+        self.assertFalse(result["grounded"])
+        self.assertEqual(result["mode"], "no_results")
+        self.assertEqual(result["sources"], [])
+
+    def test_llm_mode_when_gemini_mocked(self):
+        retrieved = [{
+            "chunk_id": "c1",
+            "document_id": "d1",
+            "filename": "notes.pdf",
+            "page": 2,
+            "text": "Backpropagation computes gradients efficiently.",
+            "similarity_score": 0.9,
+        }]
+        with patch("app.services.tutor_service.get_tutor_api_key", return_value="fake-key"):
+            with patch("app.services.tutor_service._call_gemini", return_value="Backprop uses chain rule (Page 2)."):
+                result = self.rag_service.generate_rag_answer(
+                    question="Explain backpropagation",
+                    retrieved=retrieved,
+                )
+        self.assertEqual(result["mode"], "llm")
+        self.assertTrue(result["grounded"])
+        self.assertIn("Page 2", result["answer"])
+
+    def test_ask_endpoint_retrieval_only(self):
+        record = self._build_record()
+        self.documents_routes._persist_record(record)
+        self.rag_service.index_document_record(record)
+        response = self.documents_routes.ask_documents_rag(
+            RagAskRequest(
+                email="alice@example.edu",
+                question="gradient descent loss",
+                document_id=record["document_id"],
+                top_k=3,
+            )
+        )
+        self.assertIn(response["mode"], ("retrieval_only", "llm", "no_results"))
+        self.assertEqual(response["document_scope"], "single_document")
+
+    def test_delete_removes_rag_index(self):
+        record = self._build_record()
+        self.documents_routes._persist_record(record)
+        self.rag_service.index_document_record(record)
+        status_before = self.rag_service.get_index_status("alice@example.edu", record["document_id"])
+        self.assertEqual(status_before["status"], "indexed")
+
+        deleted = self.documents_routes.delete_document(record["document_id"], email="alice@example.edu")
+        self.assertTrue(deleted["rag_index_deleted"])
+        status_after = self.rag_service.get_index_status("alice@example.edu", record["document_id"])
+        self.assertEqual(status_after["status"], "not_indexed")
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def sort(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, n):
+        self._rows = self._rows[:n]
+        return self
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _FakeCollection:
+    """Minimal Mongo-like collection for M17/M18 unit tests (not claimed as production storage)."""
+
+    def __init__(self):
+        self.rows = []
+
+    def insert_one(self, doc):
+        self.rows.append(dict(doc))
+        return type("InsertResult", (), {"inserted_id": doc.get("session_id") or len(self.rows)})()
+
+    def find(self, query=None, projection=None):
+        query = query or {}
+        matched = []
+        for row in self.rows:
+            ok = True
+            for key, expected in query.items():
+                if row.get(key) != expected:
+                    ok = False
+                    break
+            if ok:
+                copy = dict(row)
+                if projection and projection.get("_id") == 0:
+                    copy.pop("_id", None)
+                matched.append(copy)
+        return _FakeCursor(matched)
+
+    def find_one(self, query=None, projection=None):
+        for row in self.find(query, projection):
+            return row
+        return None
+
+    def update_one(self, query, update, upsert=False):
+        query = query or {}
+        set_fields = (update or {}).get("$set", {})
+        for row in self.rows:
+            if all(row.get(k) == v for k, v in query.items()):
+                row.update(set_fields)
+                return type("UpdateResult", (), {"matched_count": 1, "modified_count": 1})()
+        if upsert:
+            new_row = dict(query)
+            new_row.update(set_fields)
+            self.rows.append(new_row)
+            return type("UpdateResult", (), {"matched_count": 0, "modified_count": 0, "upserted_id": 1})()
+        return type("UpdateResult", (), {"matched_count": 0, "modified_count": 0})()
+
+
+class TestProgressTrackingM17(unittest.TestCase):
+    """M17 progress tracking: sessions, planned vs actual, ownership, DB errors."""
+
+    def setUp(self):
+        from app.routes import performance as performance_routes
+        from app.services import progress_service
+
+        self.performance_routes = performance_routes
+        self.progress_service = progress_service
+        self.sessions = _FakeCollection()
+        self.quizzes = _FakeCollection()
+        self.session_patch = patch.object(performance_routes, "sessions_collection", self.sessions)
+        self.quiz_patch = patch.object(performance_routes, "quizzes_collection", self.quizzes)
+        self.session_patch.start()
+        self.quiz_patch.start()
+
+    def tearDown(self):
+        self.session_patch.stop()
+        self.quiz_patch.stop()
+
+    def test_resolve_session_statuses_and_planned_actual(self):
+        completed = self.progress_service.resolve_session_fields({
+            "email": "Alice@Example.edu",
+            "subject": "ML",
+            "topic": "Ridge",
+            "status": "completed",
+            "planned_minutes": 50,
+            "actual_minutes": 55,
+            "date": "2026-10-11",
+        })
+        self.assertEqual(completed["email"], "alice@example.edu")
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["actual_minutes"], 55)
+        self.assertTrue(completed["completed"])
+
+        partial = self.progress_service.resolve_session_fields({
+            "email": "alice@example.edu",
+            "subject": "ML",
+            "status": "partial",
+            "planned_minutes": 60,
+            "actual_minutes": 25,
+            "date": "2026-10-11",
+        })
+        self.assertEqual(partial["status"], "partial")
+        self.assertEqual(partial["actual_minutes"], 25)
+
+        missed = self.progress_service.resolve_session_fields({
+            "email": "alice@example.edu",
+            "subject": "ML",
+            "status": "missed",
+            "planned_minutes": 50,
+            "actual_minutes": 30,
+            "date": "2026-10-11",
+        })
+        self.assertEqual(missed["status"], "missed")
+        self.assertEqual(missed["actual_minutes"], 0)
+        self.assertFalse(missed["completed"])
+
+    def test_invalid_date_rejected(self):
+        with self.assertRaises(self.progress_service.ProgressError):
+            self.progress_service.validate_session_date("11-10-2026")
+        with self.assertRaises(self.progress_service.ProgressError):
+            self.progress_service.validate_session_date("2026-13-40")
+
+    def test_schema_rejects_bad_email(self):
+        with self.assertRaises(ValidationError):
+            StudySessionLog(email="not-an-email", subject="ML", status="completed")
+
+    def test_log_and_summary_planned_versus_actual(self):
+        self.performance_routes.log_study_session(
+            StudySessionLog(
+                email="alice@example.edu",
+                subject="ML",
+                topic="Intro",
+                status="completed",
+                planned_minutes=60,
+                actual_minutes=50,
+                date="2026-10-10",
+            )
+        )
+        self.performance_routes.log_study_session(
+            StudySessionLog(
+                email="alice@example.edu",
+                subject="ML",
+                topic="Skipped",
+                status="missed",
+                planned_minutes=40,
+                date="2026-10-11",
+            )
+        )
+        self.performance_routes.log_study_session(
+            StudySessionLog(
+                email="alice@example.edu",
+                subject="Stats",
+                topic="Half",
+                status="partial",
+                planned_minutes=50,
+                actual_minutes=20,
+                date="2026-10-11",
+            )
+        )
+
+        summary = self.performance_routes.get_performance_summary("alice@example.edu")
+        self.assertEqual(summary["persistence"], "mongo")
+        self.assertEqual(summary["total_sessions"], 3)
+        self.assertEqual(summary["sessions_completed"], 1)
+        self.assertEqual(summary["sessions_partial"], 1)
+        self.assertEqual(summary["sessions_missed"], 1)
+        self.assertEqual(summary["planned_versus_actual"]["planned_minutes"], 150)
+        self.assertEqual(summary["planned_versus_actual"]["actual_minutes"], 70)
+        self.assertFalse(summary["empty"])
+
+        subjects = {m["subject"]: m for m in summary["subject_metrics"]}
+        self.assertIn("ML", subjects)
+        self.assertEqual(subjects["ML"]["sessions_missed"], 1)
+        self.assertEqual(subjects["Stats"]["sessions_partial"], 1)
+
+    def test_ownership_filters_other_students(self):
+        self.performance_routes.log_study_session(
+            StudySessionLog(
+                email="alice@example.edu",
+                subject="ML",
+                status="completed",
+                planned_minutes=50,
+                actual_minutes=50,
+                date="2026-10-11",
+            )
+        )
+        self.performance_routes.log_study_session(
+            StudySessionLog(
+                email="bob@example.edu",
+                subject="ML",
+                status="completed",
+                planned_minutes=90,
+                actual_minutes=90,
+                date="2026-10-11",
+            )
+        )
+
+        alice = self.performance_routes.get_performance_summary("alice@example.edu")
+        bob = self.performance_routes.get_performance_summary("bob@example.edu")
+        self.assertEqual(alice["total_sessions"], 1)
+        self.assertEqual(bob["total_sessions"], 1)
+        self.assertEqual(alice["planned_versus_actual"]["planned_minutes"], 50)
+        self.assertEqual(bob["planned_versus_actual"]["planned_minutes"], 90)
+
+        alice_list = self.performance_routes.list_study_sessions("alice@example.edu")
+        self.assertEqual(alice_list["count"], 1)
+        self.assertTrue(all(s["email"] == "alice@example.edu" for s in alice_list["sessions"]))
+
+    def test_empty_progress_summary(self):
+        summary = self.performance_routes.get_performance_summary("newbie@example.edu")
+        self.assertTrue(summary["empty"])
+        self.assertEqual(summary["total_sessions"], 0)
+        self.assertEqual(summary["planned_study_hours"], 0.0)
+        self.assertEqual(summary["subject_metrics"], [])
+
+    def test_database_unavailable_returns_503(self):
+        with patch.object(self.performance_routes, "sessions_collection", None):
+            with self.assertRaises(HTTPException) as ctx:
+                self.performance_routes.log_study_session(
+                    StudySessionLog(
+                        email="alice@example.edu",
+                        subject="ML",
+                        status="completed",
+                        planned_minutes=50,
+                        actual_minutes=50,
+                    )
+                )
+            self.assertEqual(ctx.exception.status_code, 503)
+            self.assertIn("MongoDB", ctx.exception.detail)
+
+            with self.assertRaises(HTTPException) as ctx2:
+                self.performance_routes.get_performance_summary("alice@example.edu")
+            self.assertEqual(ctx2.exception.status_code, 503)
+
+    def test_build_summary_strips_foreign_rows(self):
+        mixed = [
+            {
+                "email": "alice@example.edu",
+                "subject": "ML",
+                "status": "completed",
+                "planned_minutes": 50,
+                "actual_minutes": 50,
+                "date": "2026-10-11",
+            },
+            {
+                "email": "intruder@example.edu",
+                "subject": "Hacked",
+                "status": "completed",
+                "planned_minutes": 999,
+                "actual_minutes": 999,
+                "date": "2026-10-11",
+            },
+        ]
+        summary = self.progress_service.build_progress_summary(
+            email="alice@example.edu",
+            sessions=mixed,
+            quizzes=[],
+        )
+        self.assertEqual(summary["total_sessions"], 1)
+        self.assertEqual(summary["planned_versus_actual"]["planned_minutes"], 50)
+
+
+class TestAdaptivePlanningM18(unittest.TestCase):
+    """M18 adaptive planning from progress — missed/partial/repeat-safe/DB errors."""
+
+    def setUp(self):
+        from app.routes import performance as performance_routes
+        from app.services import adaptive_planning_service
+
+        self.performance_routes = performance_routes
+        self.adaptive = adaptive_planning_service
+        self.sessions = _FakeCollection()
+        self.quizzes = _FakeCollection()
+        self.plans = _FakeCollection()
+
+        self.session_patch = patch.object(performance_routes, "sessions_collection", self.sessions)
+        self.quiz_patch = patch.object(performance_routes, "quizzes_collection", self.quizzes)
+        self.plan_patch = patch.object(performance_routes, "study_plans_collection", self.plans)
+        self.session_patch.start()
+        self.quiz_patch.start()
+        self.plan_patch.start()
+
+        self.base_plan = generate_study_plan(
+            subjects=[
+                {
+                    "name": "Machine Learning",
+                    "difficulty": "Medium",
+                    "current_score": 70,
+                    "target_score": 90,
+                    "exam_date": (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d"),
+                },
+                {
+                    "name": "Statistics",
+                    "difficulty": "Low",
+                    "current_score": 80,
+                    "target_score": 85,
+                    "exam_date": None,
+                },
+            ],
+            daily_study_hours=4.0,
+            days_to_plan=7,
+            plan_date="2026-10-12",
+        )
+        self.plans.insert_one({
+            "email": "alice@example.edu",
+            "plan": self.base_plan,
+            "declared_daily_study_hours": 4.0,
+            "declared_days_to_plan": 7,
+            "updated_at": datetime.now().isoformat(),
+        })
+
+    def tearDown(self):
+        self.session_patch.stop()
+        self.quiz_patch.stop()
+        self.plan_patch.stop()
+
+    def _session(self, **kwargs):
+        base = {
+            "session_id": kwargs.get("session_id", "s-" + kwargs.get("subject", "x")),
+            "email": "alice@example.edu",
+            "subject": "Machine Learning",
+            "topic": "t",
+            "status": "completed",
+            "planned_minutes": 50,
+            "actual_minutes": 50,
+            "date": "2026-10-11",
+        }
+        base.update(kwargs)
+        self.sessions.insert_one(base)
+
+    def test_missed_and_partial_increase_priority_with_reasons(self):
+        self._session(session_id="m1", status="missed", planned_minutes=50, actual_minutes=0)
+        self._session(
+            session_id="p1",
+            subject="Statistics",
+            status="partial",
+            planned_minutes=60,
+            actual_minutes=20,
+        )
+
+        result = self.performance_routes.adapt_study_plan(
+            AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
+        )
+        self.assertFalse(result["unchanged"])
+        self.assertTrue(result["repeat_safe"])
+        self.assertIn("adapted_plan", result)
+        joined = " ".join(result["adaptations"]).lower()
+        self.assertTrue("missed" in joined or "partial" in joined or "unfinished" in joined)
+        # Daily hours must not exceed original declared limit
+        self.assertLessEqual(result["adapted_plan"]["daily_study_hours"], 4.0)
+        # Historical sessions untouched
+        self.assertEqual(len(self.sessions.rows), 2)
+
+    def test_completed_sessions_do_not_create_backlog(self):
+        self._session(session_id="c1", status="completed", planned_minutes=50, actual_minutes=50)
+        backlog = self.adaptive.compute_subject_backlog_minutes(
+            email="alice@example.edu",
+            sessions=self.sessions.rows,
+        )
+        self.assertEqual(backlog["Machine Learning"]["backlog_minutes"], 0)
+
+    def test_limited_available_time_compresses_schedule(self):
+        self._session(session_id="m1", status="missed", planned_minutes=50, actual_minutes=0)
+        result = self.performance_routes.adapt_study_plan(
+            AdaptPlanRequest(
+                email="alice@example.edu",
+                daily_available_hours=2.0,
+                plan_date="2026-10-13",
+            )
+        )
+        self.assertLessEqual(result["adapted_plan"]["daily_study_hours"], 2.0)
+        joined = " ".join(result["adaptations"]).lower()
+        self.assertTrue("reduced" in joined or "available" in joined or "missed" in joined)
+
+    def test_upcoming_exam_mentioned_in_reasons(self):
+        self._session(session_id="m1", status="missed", planned_minutes=40, actual_minutes=0)
+        result = self.performance_routes.adapt_study_plan(
+            AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
+        )
+        joined = " ".join(result["adaptations"]).lower()
+        self.assertTrue("exam" in joined or "missed" in joined)
+
+    def test_repeat_adaptation_is_idempotent(self):
+        self._session(session_id="m1", status="missed", planned_minutes=50, actual_minutes=0)
+        first = self.performance_routes.adapt_study_plan(
+            AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
+        )
+        self.assertFalse(first["unchanged"])
+        fp1 = first["adaptation_fingerprint"]
+
+        second = self.performance_routes.adapt_study_plan(
+            AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
+        )
+        self.assertTrue(second["unchanged"])
+        self.assertEqual(second["adaptation_fingerprint"], fp1)
+        self.assertIn("fingerprint", " ".join(second["adaptations"]).lower())
+
+    def test_empty_history_still_returns_plan(self):
+        result = self.performance_routes.adapt_study_plan(
+            AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
+        )
+        self.assertFalse(result["unchanged"])
+        self.assertTrue(result["progress_snapshot"]["empty"])
+        self.assertIn("adapted_plan", result)
+
+    def test_missing_plan_returns_404(self):
+        with self.assertRaises(HTTPException) as ctx:
+            self.performance_routes.adapt_study_plan(
+                AdaptPlanRequest(email="nobody@example.edu")
+            )
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_database_unavailable_returns_503(self):
+        with patch.object(self.performance_routes, "study_plans_collection", None):
+            with self.assertRaises(HTTPException) as ctx:
+                self.performance_routes.adapt_study_plan(
+                    AdaptPlanRequest(email="alice@example.edu")
+                )
+            self.assertEqual(ctx.exception.status_code, 503)
+
+        with patch.object(self.performance_routes, "sessions_collection", None):
+            with self.assertRaises(HTTPException) as ctx2:
+                self.performance_routes.adapt_study_plan(
+                    AdaptPlanRequest(email="alice@example.edu")
+                )
+            self.assertEqual(ctx2.exception.status_code, 503)
+
+    def test_ownership_scopes_sessions_to_email(self):
+        self._session(session_id="a1", status="missed", planned_minutes=50, actual_minutes=0)
+        self.sessions.insert_one({
+            "session_id": "b1",
+            "email": "bob@example.edu",
+            "subject": "Machine Learning",
+            "status": "missed",
+            "planned_minutes": 500,
+            "actual_minutes": 0,
+            "date": "2026-10-11",
+        })
+        backlog = self.adaptive.compute_subject_backlog_minutes(
+            email="alice@example.edu",
+            sessions=self.sessions.rows,
+        )
+        self.assertEqual(backlog["Machine Learning"]["backlog_minutes"], 50)
+
+    def test_adapt_plan_route_registered(self):
+        paths = list(app.openapi()["paths"].keys())
+        self.assertIn("/performance/adapt-plan", paths)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+

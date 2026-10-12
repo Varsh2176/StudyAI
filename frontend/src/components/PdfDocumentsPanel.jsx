@@ -36,8 +36,14 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
   const [loadingList, setLoadingList] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState("");
+  const [indexingId, setIndexingId] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [ragDocumentId, setRagDocumentId] = useState("");
+  const [ragQuestion, setRagQuestion] = useState("");
+  const [ragAsking, setRagAsking] = useState(false);
+  const [ragAnswer, setRagAnswer] = useState(null);
+  const [ragError, setRagError] = useState("");
   const fileInputRef = useRef(null);
 
   const loadLimits = useCallback(async () => {
@@ -210,11 +216,75 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
         params: { email }
       });
       setMessage("Document deleted.");
+      if (ragDocumentId === documentId) {
+        setRagDocumentId("");
+        setRagAnswer(null);
+      }
       await loadDocuments(email);
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to delete document.");
     } finally {
       setDeletingId("");
+    }
+  };
+
+  const handleIndex = async (documentId) => {
+    if (!email || !documentId) return;
+    setIndexingId(documentId);
+    setError("");
+    setMessage("");
+    try {
+      const res = await API.post(
+        `/documents/${encodeURIComponent(documentId)}/index`,
+        null,
+        { params: { email, force: false } }
+      );
+      setMessage(res.data.message || "Document indexed for RAG.");
+      setRagDocumentId(documentId);
+      await loadDocuments(email);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to index document for RAG.");
+    } finally {
+      setIndexingId("");
+    }
+  };
+
+  const handleAskRag = async (e) => {
+    e.preventDefault();
+    if (!email) {
+      setRagError("Enter your student email before asking about notes.");
+      return;
+    }
+    const question = ragQuestion.trim();
+    if (!question) {
+      setRagError("Enter a question about your uploaded notes.");
+      return;
+    }
+
+    setRagAsking(true);
+    setRagError("");
+    setRagAnswer(null);
+    try {
+      const res = await API.post(
+        "/documents/rag/ask",
+        {
+          email,
+          question,
+          document_id: ragDocumentId || undefined,
+          top_k: 4
+        },
+        { timeout: 45000 }
+      );
+      setRagAnswer(res.data);
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      setRagError(
+        typeof detail === "string"
+          ? detail
+          : "Failed to ask the notes tutor. Index a document first, then retry."
+      );
+    } finally {
+      setRagAsking(false);
     }
   };
 
@@ -333,7 +403,7 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
         ) : documents.length === 0 ? (
           <div className="empty-state-inline">
             <p style={{ color: "var(--text-muted)", margin: 0 }}>
-              No PDFs uploaded yet for this email. Upload a study PDF to extract text for later RAG (M16).
+              No PDFs uploaded yet for this email. Upload a study PDF, then ask grounded questions below.
             </p>
           </div>
         ) : (
@@ -343,9 +413,9 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
                 <tr>
                   <th>Filename</th>
                   <th>Status</th>
+                  <th>RAG</th>
                   <th>Pages</th>
                   <th>Text</th>
-                  <th>Size</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -362,28 +432,133 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
                     <td>
                       <span className={`badge ${statusBadgeClass(doc.status)}`}>{doc.status}</span>
                     </td>
+                    <td>
+                      <span className={`badge ${doc.rag_status === "indexed" ? "badge-low" : "badge-medium"}`}>
+                        {doc.rag_status || "not_indexed"}
+                      </span>
+                      {doc.rag_chunk_count ? (
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          {doc.rag_chunk_count} chunks
+                        </div>
+                      ) : null}
+                    </td>
                     <td>{doc.page_count ?? "—"}</td>
                     <td>
                       {doc.text_available
                         ? `${doc.extracted_characters} chars`
                         : "Not available"}
                     </td>
-                    <td>{formatBytes(doc.file_size_bytes)}</td>
                     <td>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        style={{ color: "var(--danger)" }}
-                        onClick={() => handleDelete(doc.document_id)}
-                        disabled={deletingId === doc.document_id}
-                      >
-                        {deletingId === doc.document_id ? "Deleting..." : "Delete"}
-                      </button>
+                      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => handleIndex(doc.document_id)}
+                          disabled={!doc.text_available || indexingId === doc.document_id}
+                        >
+                          {indexingId === doc.document_id ? "Indexing..." : "Index"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setRagDocumentId(doc.document_id)}
+                        >
+                          Ask
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ color: "var(--danger)" }}
+                          onClick={() => handleDelete(doc.document_id)}
+                          disabled={deletingId === doc.document_id}
+                        >
+                          {deletingId === doc.document_id ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: "1.75rem", marginBottom: 0 }}>
+        <h3 style={{ fontSize: "1.05rem", marginTop: 0 }}>Ask Your Notes (RAG)</h3>
+        <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+          Answers are grounded in indexed PDF chunks with page citations. Without GEMINI_API_KEY,
+          the API returns a clearly labelled retrieval-only excerpt.
+        </p>
+
+        <form onSubmit={handleAskRag}>
+          <div className="form-group" style={{ marginBottom: "0.85rem" }}>
+            <label htmlFor="rag-doc">Document scope</label>
+            <select
+              id="rag-doc"
+              value={ragDocumentId}
+              onChange={(e) => setRagDocumentId(e.target.value)}
+            >
+              <option value="">All indexed documents for this email</option>
+              {documents.map((doc) => (
+                <option key={doc.document_id} value={doc.document_id}>
+                  {doc.filename} ({doc.rag_status || "not_indexed"})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: "0.85rem" }}>
+            <label htmlFor="rag-question">Question</label>
+            <textarea
+              id="rag-question"
+              rows={3}
+              value={ragQuestion}
+              onChange={(e) => setRagQuestion(e.target.value)}
+              placeholder="e.g. What does my notes say about gradient descent?"
+              disabled={ragAsking}
+            />
+          </div>
+
+          {ragError && <div className="alert alert-danger">{ragError}</div>}
+
+          <button type="submit" className="btn btn-primary" disabled={ragAsking || !ragQuestion.trim()}>
+            {ragAsking ? "Searching notes..." : "Ask Notes Tutor"}
+          </button>
+        </form>
+
+        {ragAnswer && (
+          <div style={{ marginTop: "1.25rem" }}>
+            <div className="alert alert-info" style={{ marginBottom: "0.85rem" }}>
+              Mode: <strong>{ragAnswer.mode}</strong>
+              {ragAnswer.provider ? <> · Provider: {ragAnswer.provider}</> : null}
+              {ragAnswer.model_used ? <> · Model: {ragAnswer.model_used}</> : null}
+              <> · Retrieved: {ragAnswer.retrieved_count}</>
+            </div>
+            <div className="chat-bubble chat-bubble-ai" style={{ maxWidth: "100%" }}>
+              <div className="chat-role-label">Notes Tutor</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{ragAnswer.answer}</div>
+            </div>
+
+            {ragAnswer.sources?.length > 0 ? (
+              <div style={{ marginTop: "1rem" }}>
+                <h4 style={{ fontSize: "0.95rem", marginBottom: "0.5rem" }}>Sources</h4>
+                <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>
+                  {ragAnswer.sources.map((src, idx) => (
+                    <li key={`${src.chunk_id}-${idx}`} style={{ marginBottom: "0.55rem" }}>
+                      <strong>{src.filename}</strong> · Page {src.page} · score {src.similarity_score}
+                      <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                        {src.snippet}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p style={{ color: "var(--text-muted)", marginTop: "0.85rem" }}>
+                No source passages were returned for this question.
+              </p>
+            )}
           </div>
         )}
       </div>
