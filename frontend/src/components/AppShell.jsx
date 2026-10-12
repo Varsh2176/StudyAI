@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import Navbar from "./Navbar";
+import { Button, Modal } from "./ui";
 
 const PAGE_TITLES = {
   "/dashboard": "Dashboard",
@@ -25,7 +26,9 @@ function titleForPath(pathname) {
  */
 function AppShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [drawerKey, setDrawerKey] = useState(null);
+  const [switchOpen, setSwitchOpen] = useState(false);
   const drawerOpen = drawerKey === location.key;
   const toggleRef = useRef(null);
   const sidebarRef = useRef(null);
@@ -86,6 +89,14 @@ function AppShell() {
     };
   }, [drawerOpen]);
 
+  const confirmSwitchStudent = () => {
+    // Clears only the app's existing local identity key — no backend call.
+    localStorage.removeItem("student_email");
+    setSwitchOpen(false);
+    setDrawerKey(null);
+    navigate("/");
+  };
+
   const pageTitle = titleForPath(location.pathname);
 
   return (
@@ -128,12 +139,44 @@ function AppShell() {
             <span className="sw-menu-toggle-icon" aria-hidden="true" />
           </button>
           <h1 className="sw-page-title">{pageTitle}</h1>
+          <div className="sw-header-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setSwitchOpen(true)}
+            >
+              Switch student
+            </Button>
+          </div>
         </header>
 
         <main className="sw-shell-content" id="main-content">
           <Outlet />
         </main>
       </div>
+
+      <Modal
+        open={switchOpen}
+        title="Switch student?"
+        onClose={() => setSwitchOpen(false)}
+        footer={
+          <>
+            <Button type="button" variant="secondary" onClick={() => setSwitchOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="primary" onClick={confirmSwitchStudent}>
+              Switch student
+            </Button>
+          </>
+        }
+      >
+        <p>
+          This clears the locally stored student email on this device and returns you to
+          registration so you can continue as a different student. It does not call the server
+          or delete any account data.
+        </p>
+      </Modal>
     </div>
   );
 }

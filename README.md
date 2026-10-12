@@ -175,6 +175,15 @@ Test coverage includes:
 - Out-of-scope query rejection
 - API health and model status endpoints
 
+### Optional secret scanning (developer workflow)
+
+Local [pre-commit](https://pre-commit.com/) + [gitleaks](https://github.com/gitleaks/gitleaks) is configured in `.pre-commit-config.yaml` for contributors who want push-time scanning. It is **not** an application dependency. After pinning the gitleaks `rev` tag in that file:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
 ---
 
 ## 8. Deployment Guidelines
@@ -182,4 +191,7 @@ Test coverage includes:
 - **Frontend**: Deployable to Vercel, Netlify, or AWS S3 + CloudFront. Build with `npm run build` (outputs to `dist/`).
 - **Backend**: Deployable to Render, Railway, or AWS EC2 using `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
 - **Database**: MongoDB Atlas cloud cluster with IP allowlisting enabled.
-- **Environment Security**: Keep `MONGODB_URI` and `GEMINI_API_KEY` in environment variables; never commit `.env` files to source control.
+
+### Secrets handling
+
+Never commit `.env` files or live credentials. Copy `.env.example` / `backend/.env.example` and fill in local values (`MONGODB_URI`, `GEMINI_API_KEY`, etc.). Keep secrets in environment variables or a private secret store only. If a real credential was ever exposed in git or chat, rotate it in the provider (e.g. Atlas DB user password, Gemini API key) and treat the old value as compromised.

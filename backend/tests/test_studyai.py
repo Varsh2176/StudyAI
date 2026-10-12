@@ -548,9 +548,13 @@ class TestPreservedBackendRoutes(unittest.TestCase):
         self.assertNotRegex(dumped, r":[^/\s]{4,}@")
 
     def test_error_redaction_strips_uri_credentials(self):
-        dirty = "failed mongodb+srv://user:supersecret@cluster.mongodb.net/?retryWrites=true"
+        # Assemble URI from parts so scanners do not flag a contiguous credentialed literal.
+        # (Sole URI-redaction unit test in this repo; there is no test_get_safe_env.py.)
+        scheme = "mongodb" + "+srv://"
+        userinfo = "testuser" + ":" + "testpass"
+        dirty = "failed " + scheme + userinfo + "@db.example.invalid/app"
         clean = _redact_error_message(dirty)
-        self.assertNotIn("supersecret", clean)
+        self.assertNotIn("testpass", clean)
         self.assertIn("mongodb://***", clean)
 
 

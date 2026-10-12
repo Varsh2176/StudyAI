@@ -1,8 +1,18 @@
 node_modules/
+dist/
+frontend/dist/
+
 .env
+.env.*
+!.env.example
+!**/.env.example
+
 .venv/
 __pycache__/
 *.pyc
+*.pem
+*.key
+
 models/*.pkl
 models/*.joblib
 

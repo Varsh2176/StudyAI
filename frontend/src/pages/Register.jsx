@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import API from "../services/api";
+import { Button, Card, ErrorMessage, Input } from "../components/ui";
 
 function Register() {
   const [form, setForm] = useState({
@@ -62,65 +63,76 @@ function Register() {
   };
 
   return (
-    <div className="page-container" style={{ maxWidth: "480px" }}>
-      <div className="card">
-        <h1 style={{ fontSize: "1.75rem", marginBottom: "0.5rem" }}>Student Registration</h1>
-        <p style={{ color: "var(--text-muted)", marginBottom: "1.5rem" }}>
+    <div className="sw-register">
+      <Card>
+        <h1 className="sw-register-card-title">Student registration</h1>
+        <p className="sw-register-card-desc">
           Create your StudyWise AI account to generate adaptive study schedules.
         </p>
 
-        {error && <div className="alert alert-danger">{error}</div>}
-        {success && <div className="alert alert-success">{success}</div>}
+        {error ? <ErrorMessage message={error} /> : null}
+        {success ? (
+          <div className="sw-register-success" role="status">
+            {success}
+          </div>
+        ) : null}
 
         <form onSubmit={handleSubmit}>
-          <div className="form-group" style={{ marginBottom: "1rem" }}>
-            <label>Full Name</label>
-            <input
-              type="text"
-              name="name"
-              placeholder="e.g. Alex Johnson"
-              value={form.name}
-              onChange={handleChange}
-              required
-            />
-          </div>
+          <Input
+            id="register-name"
+            label="Full name"
+            type="text"
+            name="name"
+            placeholder="e.g. Alex Johnson"
+            value={form.name}
+            onChange={handleChange}
+            required
+            autoComplete="name"
+            hint="Your name as used for study records."
+          />
 
-          <div className="form-group" style={{ marginBottom: "1rem" }}>
-            <label>Email Address</label>
-            <input
-              type="email"
-              name="email"
-              placeholder="student@example.edu"
-              value={form.email}
-              onChange={handleChange}
-              required
-            />
-          </div>
+          <Input
+            id="register-email"
+            label="Email address"
+            type="email"
+            name="email"
+            placeholder="student@example.edu"
+            value={form.email}
+            onChange={handleChange}
+            required
+            autoComplete="email"
+            hint="Used as your student identity across the app."
+          />
 
-          <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-            <label>Password</label>
-            <input
-              type="password"
-              name="password"
-              placeholder="••••••••"
-              value={form.password}
-              onChange={handleChange}
-              required
-            />
-          </div>
+          <Input
+            id="register-password"
+            label="Password"
+            type="password"
+            name="password"
+            placeholder="••••••••"
+            value={form.password}
+            onChange={handleChange}
+            required
+            autoComplete="new-password"
+            hint="Required by the registration API."
+          />
 
-          <button type="submit" className="btn btn-primary" style={{ width: "100%" }} disabled={loading}>
-            {loading ? "Registering..." : "Register Account"}
-          </button>
+          <Button
+            type="submit"
+            variant="primary"
+            className="sw-register-submit"
+            loading={loading}
+            disabled={loading}
+          >
+            {loading ? "Registering..." : "Register account"}
+          </Button>
         </form>
 
-        <div style={{ marginTop: "1.5rem", fontSize: "0.9rem", color: "var(--text-muted)" }}>
+        <div className="sw-register-footer">
           Already registered?{" "}
-          <Link to="/profile" style={{ color: "var(--primary)", fontWeight: 600 }}>
-            Go to Student Profile →
-          </Link>
+          <Link to="/profile">Go to Student Profile →</Link>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

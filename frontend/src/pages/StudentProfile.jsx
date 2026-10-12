@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import API from "../services/api";
+import {
+  Button,
+  Card,
+  ErrorMessage,
+  Input,
+  Skeleton,
+} from "../components/ui";
 
 function StudentProfile() {
   const [form, setForm] = useState({
@@ -19,14 +26,6 @@ function StudentProfile() {
   const [fetching, setFetching] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    const savedEmail = localStorage.getItem("student_email");
-    if (savedEmail) {
-      setForm((prev) => ({ ...prev, email: savedEmail }));
-      fetchExistingProfile(savedEmail);
-    }
-  }, []);
 
   const fetchExistingProfile = async (emailToFetch) => {
     if (!emailToFetch) return;
@@ -53,6 +52,23 @@ function StudentProfile() {
       setFetching(false);
     }
   };
+
+  useEffect(() => {
+    const savedEmail = localStorage.getItem("student_email");
+    if (!savedEmail) return undefined;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setForm((prev) => ({ ...prev, email: savedEmail }));
+      void fetchExistingProfile(savedEmail);
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const handleChange = (e) => {
     setForm({
@@ -94,163 +110,174 @@ function StudentProfile() {
   };
 
   return (
-    <div className="page-container" style={{ maxWidth: "750px" }}>
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
-          <div>
-            <h1 style={{ fontSize: "1.75rem", margin: 0 }}>Student Profile</h1>
-            <p style={{ color: "var(--text-muted)", margin: "0.25rem 0 0 0" }}>
-              Configure your academic standing to power predictions and study planning.
-            </p>
-          </div>
-          {form.email && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => fetchExistingProfile(form.email)}
-              disabled={fetching}
-            >
-              {fetching ? "Refreshing..." : "Reload Profile"}
-            </button>
-          )}
+    <div className="sw-forms-page page-container">
+      <div className="sw-forms-toolbar">
+        <section className="sw-forms-intro" aria-labelledby="profile-heading">
+          <h2 id="profile-heading">Student profile</h2>
+          <p>
+            Configure your academic standing to power predictions and study planning.
+          </p>
+        </section>
+        {form.email ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => fetchExistingProfile(form.email)}
+            loading={fetching}
+            disabled={fetching}
+          >
+            {fetching ? "Refreshing..." : "Reload profile"}
+          </Button>
+        ) : null}
+      </div>
+
+      {error ? (
+        <ErrorMessage
+          message={typeof error === "string" ? error : "Failed to save profile."}
+          onRetry={form.email ? () => fetchExistingProfile(form.email) : undefined}
+          retryLabel="Reload profile"
+        />
+      ) : null}
+
+      {message ? (
+        <div className="sw-register-success" role="status">
+          {message}
         </div>
+      ) : null}
 
-        {error && <div className="alert alert-danger">{error}</div>}
-        {message && <div className="alert alert-success">{message}</div>}
+      {fetching && !form.course ? (
+        <div aria-busy="true" aria-label="Loading profile">
+          <Skeleton variant="card" />
+          <Skeleton variant="block" />
+        </div>
+      ) : null}
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-grid">
-            <div className="form-group">
-              <label>Student Email *</label>
-              <input
-                name="email"
-                type="email"
-                placeholder="student@example.edu"
-                value={form.email}
-                onChange={handleChange}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Age *</label>
-              <input
-                name="age"
-                type="number"
-                placeholder="20"
-                value={form.age}
-                onChange={handleChange}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Degree / Course *</label>
-              <input
-                name="course"
-                placeholder="B.Tech Computer Science"
-                value={form.course}
-                onChange={handleChange}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Academic Year *</label>
-              <input
-                name="year"
-                type="number"
-                placeholder="3"
-                value={form.year}
-                onChange={handleChange}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Department / Branch *</label>
-              <input
-                name="branch"
-                placeholder="CSE / AI & ML"
-                value={form.branch}
-                onChange={handleChange}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Daily Study Hours *</label>
-              <input
-                name="study_hours"
-                type="number"
-                step="0.1"
-                placeholder="4.0"
-                value={form.study_hours}
-                onChange={handleChange}
-                required
-              />
-              <span className="form-help">Typical self-study hours per day</span>
-            </div>
-
-            <div className="form-group">
-              <label>Attendance Percentage *</label>
-              <input
-                name="attendance"
-                type="number"
-                placeholder="85"
-                value={form.attendance}
-                onChange={handleChange}
-                required
-              />
-              <span className="form-help">Current semester attendance (0 - 100%)</span>
-            </div>
-
-            <div className="form-group">
-              <label>Previous CGPA / Marks *</label>
-              <input
-                name="previous_cgpa"
-                type="number"
-                step="0.01"
-                placeholder="8.4"
-                value={form.previous_cgpa}
-                onChange={handleChange}
-                required
-              />
-              <span className="form-help">Out of 10.0 scale</span>
-            </div>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: "1.75rem" }}>
-            <label>Enrolled Subjects (comma-separated) *</label>
-            <input
-              name="subjects"
-              placeholder="Machine Learning, Data Structures, Operating Systems, Computer Networks"
-              value={form.subjects}
+      <form onSubmit={handleSubmit}>
+        <Card title="Personal details" className="sw-forms-section">
+          <div className="sw-forms-grid">
+            <Input
+              label="Student email *"
+              name="email"
+              type="email"
+              placeholder="student@example.edu"
+              value={form.email}
+              onChange={handleChange}
+              required
+              autoComplete="email"
+            />
+            <Input
+              label="Age *"
+              name="age"
+              type="number"
+              placeholder="20"
+              value={form.age}
               onChange={handleChange}
               required
             />
-            <span className="form-help">These subjects will be auto-imported into your personalized study planner</span>
           </div>
+        </Card>
 
-          <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: "100%", padding: "0.85rem" }}>
-            {loading ? "Saving Profile..." : "Save Profile"}
-          </button>
-        </form>
-
-        {message && (
-          <div style={{ marginTop: "1.75rem", display: "flex", gap: "1rem", justifyContent: "center", flexWrap: "wrap" }}>
-            <Link to="/dashboard" className="btn btn-primary">
-              Open Dashboard →
-            </Link>
-            <Link to="/predict" className="btn btn-secondary">
-              Predict Exam Score →
-            </Link>
-            <Link to="/planner" className="btn btn-secondary">
-              Generate Study Plan →
-            </Link>
+        <Card title="Academic details" className="sw-forms-section">
+          <div className="sw-forms-grid">
+            <Input
+              label="Degree / course *"
+              name="course"
+              placeholder="B.Tech Computer Science"
+              value={form.course}
+              onChange={handleChange}
+              required
+            />
+            <Input
+              label="Academic year *"
+              name="year"
+              type="number"
+              placeholder="3"
+              value={form.year}
+              onChange={handleChange}
+              required
+            />
+            <Input
+              label="Department / branch *"
+              name="branch"
+              placeholder="CSE / AI & ML"
+              value={form.branch}
+              onChange={handleChange}
+              required
+            />
           </div>
-        )}
-      </div>
+          <Input
+            label="Enrolled subjects (comma-separated) *"
+            name="subjects"
+            placeholder="Machine Learning, Data Structures, Operating Systems, Computer Networks"
+            value={form.subjects}
+            onChange={handleChange}
+            required
+            hint="These subjects will be auto-imported into your personalized study planner"
+          />
+        </Card>
+
+        <Card title="Study preferences" className="sw-forms-section">
+          <div className="sw-forms-grid">
+            <Input
+              label="Daily study hours *"
+              name="study_hours"
+              type="number"
+              step="0.1"
+              placeholder="4.0"
+              value={form.study_hours}
+              onChange={handleChange}
+              required
+              hint="Typical self-study hours per day"
+            />
+            <Input
+              label="Attendance percentage *"
+              name="attendance"
+              type="number"
+              placeholder="85"
+              value={form.attendance}
+              onChange={handleChange}
+              required
+              hint="Current semester attendance (0 - 100%)"
+            />
+            <Input
+              label="Previous CGPA / marks *"
+              name="previous_cgpa"
+              type="number"
+              step="0.01"
+              placeholder="8.4"
+              value={form.previous_cgpa}
+              onChange={handleChange}
+              required
+              hint="Out of 10.0 scale"
+            />
+          </div>
+        </Card>
+
+        <Button
+          type="submit"
+          variant="primary"
+          className="sw-register-submit"
+          loading={loading}
+          disabled={loading}
+        >
+          {loading ? "Saving profile..." : "Save profile"}
+        </Button>
+      </form>
+
+      {message ? (
+        <div className="sw-forms-actions">
+          <Link to="/dashboard" className="sw-btn sw-btn--primary sw-btn--md">
+            Open Dashboard →
+          </Link>
+          <Link to="/predict" className="sw-btn sw-btn--secondary sw-btn--md">
+            Predict Exam Score →
+          </Link>
+          <Link to="/planner" className="sw-btn sw-btn--secondary sw-btn--md">
+            Generate Study Plan →
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }
