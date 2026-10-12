@@ -1,8 +1,21 @@
 import { useState, useEffect } from "react";
 import API from "../services/api";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorMessage,
+  Input,
+  Select,
+  Skeleton,
+  priorityToBadgeVariant,
+  statusToBadgeVariant,
+  subjectColor,
+} from "../components/ui";
 
 function StudyPlanner() {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => localStorage.getItem("student_email") || "");
   const [dailyHours, setDailyHours] = useState(4.0);
   const [startTime, setStartTime] = useState("09:00");
   const [daysToPlan, setDaysToPlan] = useState(7);
@@ -20,14 +33,6 @@ function StudyPlanner() {
   const [adaptations, setAdaptations] = useState([]);
   const [activeTab, setActiveTab] = useState("daily"); // "daily" or "weekly"
 
-  useEffect(() => {
-    const savedEmail = localStorage.getItem("student_email");
-    if (savedEmail) {
-      setEmail(savedEmail);
-      loadSavedPlan(savedEmail);
-    }
-  }, []);
-
   const loadSavedPlan = async (studentEmail) => {
     try {
       const res = await API.get(`/study-plan/${studentEmail}`);
@@ -38,6 +43,24 @@ function StudyPlanner() {
       console.log("No saved study plan found:", err);
     }
   };
+
+  useEffect(() => {
+    if (!email) return undefined;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (!cancelled) {
+        void loadSavedPlan(email);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // Initial hydrate only — email is seeded from localStorage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const importFromProfile = async () => {
     if (!email) return;
@@ -185,7 +208,7 @@ function StudyPlanner() {
           weekly_schedule: res.data.weekly_schedule
         }));
       }
-    } catch (err) {
+    } catch {
       // Local fallback toggle
       setPlan((prev) => {
         const copy = { ...prev };
@@ -199,108 +222,163 @@ function StudyPlanner() {
     }
   };
 
+  const dailyHoursDisplay =
+    plan?.daily_study_hours !== undefined && plan?.daily_study_hours !== null
+      ? plan.daily_study_hours
+      : null;
+  const daysPlannedDisplay =
+    plan?.days_planned !== undefined && plan?.days_planned !== null
+      ? plan.days_planned
+      : null;
+  const totalStudyHoursDisplay =
+    plan?.total_scheduled_study_hours !== undefined && plan?.total_scheduled_study_hours !== null
+      ? plan.total_scheduled_study_hours
+      : null;
+  const subjectCountDisplay = plan?.subjects_weighted?.length ?? null;
+
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1>Personalized Study Planner</h1>
+    <div className="sw-planner page-container">
+      <section className="sw-planner-intro" aria-labelledby="planner-heading">
+        <h2 id="planner-heading">Personalized study planner</h2>
         <p>
-          Deterministic scheduling engine calculating urgency, score gaps, and difficulty weights
-          with Pomodoro interval blocks (50m study / 10m break).
+          Deterministic scheduling from subject difficulty, score gaps, and exam urgency,
+          with Pomodoro-style blocks (50m study / 10m break). Generate a plan or adapt from logged progress.
         </p>
-      </div>
+      </section>
 
-      {error && <div className="alert alert-danger">{error}</div>}
-      {success && <div className="alert alert-success">{success}</div>}
+      {error ? (
+        <ErrorMessage
+          message={typeof error === "string" ? error : "Something went wrong."}
+          onRetry={email ? () => loadSavedPlan(email) : undefined}
+          retryLabel="Reload saved plan"
+        />
+      ) : null}
 
-      {adaptations.length > 0 && (
-        <div className="card" style={{ borderLeft: "4px solid var(--accent)" }}>
-          <h3 style={{ margin: "0 0 0.5rem 0" }}>Why the plan changed</h3>
-          <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+      {success ? (
+        <div className="sw-planner-success" role="status">
+          {success}
+        </div>
+      ) : null}
+
+      {adaptations.length > 0 ? (
+        <Card title="Why the plan changed" className="sw-planner-adapt-card">
+          <ul className="sw-planner-adapt-list">
             {adaptations.map((note, i) => (
               <li key={i}>{note}</li>
             ))}
           </ul>
-        </div>
-      )}
+        </Card>
+      ) : null}
 
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: "0.75rem" }}>
-          <h2 className="card-title" style={{ margin: 0 }}>Plan Parameters & Subjects</h2>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            {email && (
-              <button type="button" className="btn btn-secondary btn-sm" onClick={importFromProfile}>
-                Import Subjects from Profile
-              </button>
+      {plan ? (
+        <div className="sw-planner-stats">
+          <Card title="Daily study hours">
+            {dailyHoursDisplay !== null ? (
+              <div className="sw-planner-stat-value">{dailyHoursDisplay}</div>
+            ) : (
+              <p className="sw-planner-stat-muted">Not available</p>
             )}
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={handleAdaptFromProgress}
-              disabled={adapting || loading}
-            >
-              {adapting ? "Adapting..." : "Adapt from Progress"}
-            </button>
-          </div>
+          </Card>
+          <Card title="Days planned">
+            {daysPlannedDisplay !== null ? (
+              <div className="sw-planner-stat-value">{daysPlannedDisplay}</div>
+            ) : (
+              <p className="sw-planner-stat-muted">Not available</p>
+            )}
+          </Card>
+          <Card title="Scheduled study">
+            {totalStudyHoursDisplay !== null ? (
+              <div className="sw-planner-stat-value">
+                {totalStudyHoursDisplay}
+                <span className="sw-planner-stat-muted"> hrs</span>
+              </div>
+            ) : (
+              <p className="sw-planner-stat-muted">Not available</p>
+            )}
+          </Card>
+          <Card title="Subjects weighted">
+            {subjectCountDisplay !== null ? (
+              <div className="sw-planner-stat-value">{subjectCountDisplay}</div>
+            ) : (
+              <p className="sw-planner-stat-muted">Not available</p>
+            )}
+          </Card>
         </div>
+      ) : null}
 
+      <Card
+        title="Plan parameters & subjects"
+        action={
+          <div className="sw-planner-actions">
+            {email ? (
+              <Button type="button" variant="secondary" size="sm" onClick={importFromProfile}>
+                Import from profile
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              loading={adapting}
+              disabled={adapting || loading}
+              onClick={handleAdaptFromProgress}
+            >
+              {adapting ? "Adapting..." : "Adapt from progress"}
+            </Button>
+          </div>
+        }
+      >
         <form onSubmit={handleGeneratePlan}>
-          <div className="form-group" style={{ marginBottom: "1rem" }}>
-            <label htmlFor="planner-email">Student email (required to save / adapt)</label>
-            <input
-              id="planner-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@college.edu"
+          <Input
+            id="planner-email"
+            label="Student email (required to save / adapt)"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@college.edu"
+          />
+
+          <div className="sw-planner-form-grid">
+            <Input
+              label="Daily study availability (hours)"
+              type="number"
+              min="1"
+              max="10"
+              step="0.5"
+              value={dailyHours}
+              onChange={(e) => setDailyHours(e.target.value)}
+              hint="Capped at 10 hrs to protect against cognitive fatigue"
+              required
             />
+            <Input
+              label="Preferred study start time"
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              required
+            />
+            <Select
+              label="Days to plan ahead"
+              value={daysToPlan}
+              onChange={(e) => setDaysToPlan(Number(e.target.value))}
+            >
+              <option value={3}>3 Days</option>
+              <option value={7}>7 Days (1 Week)</option>
+              <option value={14}>14 Days (2 Weeks)</option>
+            </Select>
           </div>
 
-          <div className="form-grid" style={{ marginBottom: "1.5rem" }}>
-            <div className="form-group">
-              <label>Daily Study Availability (Hours)</label>
-              <input
-                type="number"
-                min="1"
-                max="10"
-                step="0.5"
-                value={dailyHours}
-                onChange={(e) => setDailyHours(e.target.value)}
-                required
-              />
-              <span className="form-help">Capped at 10 hrs to protect against cognitive fatigue</span>
-            </div>
+          <h3 className="sw-planner-subjects-title">Subjects to balance</h3>
 
-            <div className="form-group">
-              <label>Preferred Study Start Time</label>
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Days to Plan Ahead</label>
-              <select value={daysToPlan} onChange={(e) => setDaysToPlan(Number(e.target.value))}>
-                <option value={3}>3 Days</option>
-                <option value={7}>7 Days (1 Week)</option>
-                <option value={14}>14 Days (2 Weeks)</option>
-              </select>
-            </div>
-          </div>
-
-          <h3 style={{ fontSize: "1rem", color: "#334155", marginBottom: "0.75rem" }}>Subjects to Balance</h3>
-
-          <div className="table-responsive" style={{ marginBottom: "1rem" }}>
-            <table className="styled-table">
+          <div className="sw-planner-table-wrap">
+            <table className="sw-planner-table">
               <thead>
                 <tr>
-                  <th>Subject Name</th>
+                  <th>Subject</th>
                   <th>Difficulty</th>
-                  <th>Current Marks (%)</th>
-                  <th>Target Marks (%)</th>
-                  <th>Exam Date (Optional)</th>
+                  <th>Current %</th>
+                  <th>Target %</th>
+                  <th>Exam date</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -314,14 +392,14 @@ function StudyPlanner() {
                         value={subj.name}
                         onChange={(e) => handleSubjectChange(idx, "name", e.target.value)}
                         required
-                        style={{ width: "100%", padding: "0.4rem" }}
+                        aria-label={`Subject name ${idx + 1}`}
                       />
                     </td>
                     <td>
                       <select
                         value={subj.difficulty}
                         onChange={(e) => handleSubjectChange(idx, "difficulty", e.target.value)}
-                        style={{ padding: "0.4rem" }}
+                        aria-label={`Difficulty ${idx + 1}`}
                       >
                         <option value="Low">Low</option>
                         <option value="Medium">Medium</option>
@@ -335,7 +413,7 @@ function StudyPlanner() {
                         max="100"
                         value={subj.current_score}
                         onChange={(e) => handleSubjectChange(idx, "current_score", e.target.value)}
-                        style={{ width: "80px", padding: "0.4rem" }}
+                        aria-label={`Current score ${idx + 1}`}
                       />
                     </td>
                     <td>
@@ -345,7 +423,7 @@ function StudyPlanner() {
                         max="100"
                         value={subj.target_score}
                         onChange={(e) => handleSubjectChange(idx, "target_score", e.target.value)}
-                        style={{ width: "80px", padding: "0.4rem" }}
+                        aria-label={`Target score ${idx + 1}`}
                       />
                     </td>
                     <td>
@@ -353,20 +431,21 @@ function StudyPlanner() {
                         type="date"
                         value={subj.exam_date}
                         onChange={(e) => handleSubjectChange(idx, "exam_date", e.target.value)}
-                        style={{ padding: "0.4rem" }}
+                        aria-label={`Exam date ${idx + 1}`}
                       />
                     </td>
                     <td>
-                      {subjects.length > 1 && (
-                        <button
+                      {subjects.length > 1 ? (
+                        <Button
                           type="button"
-                          className="btn btn-secondary btn-sm"
+                          variant="ghost"
+                          size="sm"
                           onClick={() => removeSubject(idx)}
-                          style={{ color: "var(--danger)" }}
+                          aria-label={`Remove subject ${idx + 1}`}
                         >
-                          ✕
-                        </button>
-                      )}
+                          Remove
+                        </Button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -374,126 +453,210 @@ function StudyPlanner() {
             </table>
           </div>
 
-          <div style={{ display: "flex", gap: "1rem" }}>
-            <button type="button" className="btn btn-secondary" onClick={addSubject}>
-              + Add Subject
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={loading} style={{ flex: 1 }}>
-              {loading ? "Generating Schedule..." : "Generate Deterministic Study Plan"}
-            </button>
+          <div className="sw-planner-form-footer">
+            <Button type="button" variant="secondary" onClick={addSubject}>
+              + Add subject
+            </Button>
+            <Button type="submit" variant="primary" loading={loading} disabled={loading}>
+              {loading ? "Generating schedule..." : "Generate study plan"}
+            </Button>
           </div>
         </form>
-      </div>
+      </Card>
 
-      {/* Generated Schedule Section */}
-      {plan && (
+      {loading && !plan ? (
+        <div aria-busy="true" aria-label="Generating plan">
+          <Skeleton variant="card" />
+          <Skeleton variant="block" />
+        </div>
+      ) : null}
+
+      {!loading && !plan ? (
+        <EmptyState
+          title="No study plan yet"
+          description="Configure subjects above and generate a deterministic timetable, or adapt from progress if you already have a saved plan."
+        />
+      ) : null}
+
+      {plan ? (
         <div>
-          {/* Priority Distribution Breakdown */}
-          <div className="card">
-            <h2 className="card-title">Subject Priority Weightings</h2>
-            <div className="form-grid">
-              {plan.subjects_weighted?.map((sw, idx) => (
-                <div key={idx} style={{ background: "#f8fafc", padding: "1rem", borderRadius: "8px", border: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.35rem" }}>
-                    <strong>{sw.name}</strong>
-                    <span className="badge badge-info">{Math.round((sw.allocated_ratio || 0) * 100)}% Time Share</span>
-                  </div>
-                  <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                    Difficulty: <strong>{sw.difficulty}</strong> | Score Gap: <strong>{sw.target_score - sw.current_score} pts</strong>
-                    {sw.days_left !== null && sw.days_left !== undefined && (
-                      <div>Exam in: <strong style={{ color: sw.days_left <= 7 ? "var(--danger)" : "inherit" }}>{sw.days_left} days</strong></div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <Card title="Subject priority weightings">
+            {!plan.subjects_weighted?.length ? (
+              <p className="sw-planner-stat-muted">No subject weightings returned for this plan.</p>
+            ) : (
+              <div className="sw-planner-weight-grid">
+                {plan.subjects_weighted.map((sw, idx) => {
+                  const colors = subjectColor(sw.name || `subject-${idx}`);
+                  const gap =
+                    sw.target_score !== undefined && sw.current_score !== undefined
+                      ? Number(sw.target_score) - Number(sw.current_score)
+                      : null;
+                  const share =
+                    sw.allocated_ratio !== undefined && sw.allocated_ratio !== null
+                      ? Math.round(Number(sw.allocated_ratio) * 100)
+                      : null;
+                  return (
+                    <div key={idx} className="sw-planner-weight-card">
+                      <div className="sw-planner-weight-head">
+                        <strong style={{ color: colors.solid }}>{sw.name}</strong>
+                        {share !== null && !Number.isNaN(share) ? (
+                          <Badge variant="info">{share}% time share</Badge>
+                        ) : null}
+                      </div>
+                      <div className="sw-planner-stat-muted">
+                        Difficulty: <strong>{sw.difficulty}</strong>
+                        {gap !== null && !Number.isNaN(gap) ? (
+                          <> · Score gap: <strong>{gap} pts</strong></>
+                        ) : null}
+                        {sw.priority_level ? (
+                          <>
+                            {" · "}
+                            <Badge variant={priorityToBadgeVariant(sw.priority_level)}>
+                              {sw.priority_level}
+                            </Badge>
+                          </>
+                        ) : null}
+                        {sw.days_left !== null && sw.days_left !== undefined ? (
+                          <div>
+                            Exam in:{" "}
+                            <strong
+                              style={{
+                                color:
+                                  Number(sw.days_left) <= 7
+                                    ? "var(--sw-danger)"
+                                    : "var(--sw-text)",
+                              }}
+                            >
+                              {sw.days_left} days
+                            </strong>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
 
-          {/* Schedule Tabs */}
-          <div className="card">
-            <div style={{ display: "flex", gap: "1rem", borderBottom: "1px solid var(--border)", paddingBottom: "1rem", marginBottom: "1.5rem" }}>
-              <button
+          <Card title="Timetable">
+            <div className="sw-planner-tabs">
+              <Button
                 type="button"
-                className={`btn ${activeTab === "daily" ? "btn-primary" : "btn-secondary"}`}
+                variant={activeTab === "daily" ? "primary" : "secondary"}
+                size="sm"
                 onClick={() => setActiveTab("daily")}
               >
-                Today's Daily Timetable
-              </button>
-              <button
+                Daily timetable
+              </Button>
+              <Button
                 type="button"
-                className={`btn ${activeTab === "weekly" ? "btn-primary" : "btn-secondary"}`}
+                variant={activeTab === "weekly" ? "primary" : "secondary"}
+                size="sm"
                 onClick={() => setActiveTab("weekly")}
               >
-                Full Weekly Timetable ({plan.days_planned} Days)
-              </button>
+                Weekly timetable
+                {daysPlannedDisplay !== null ? ` (${daysPlannedDisplay} days)` : ""}
+              </Button>
             </div>
 
-            {/* Daily View */}
             {activeTab === "daily" && (
               <div>
-                <h3 style={{ fontSize: "1.1rem", marginBottom: "1rem", color: "#0f172a" }}>
-                  Today's Scheduled Slots ({plan.daily_study_hours} Hours)
+                <h3 className="sw-planner-subjects-title">
+                  Scheduled slots
+                  {dailyHoursDisplay !== null ? ` (${dailyHoursDisplay} hours)` : ""}
                 </h3>
-                {plan.daily_schedule?.map((slot, idx) => (
-                  <div key={idx} className="timetable-slot">
-                    <div className="slot-time">
-                      🕒 {slot.start_time} - {slot.end_time}
-                    </div>
-                    <div style={{ flex: 1, padding: "0 1.5rem" }}>
-                      <div className="slot-subject">{slot.subject}</div>
-                      <div className="slot-activity">{slot.recommended_focus}</div>
-                    </div>
-                    <div style={{ fontSize: "0.85rem", color: "var(--text-muted)", fontStyle: "italic" }}>
-                      Rest: {slot.break_time}
-                    </div>
-                  </div>
-                ))}
+                {!plan.daily_schedule?.length ? (
+                  <EmptyState
+                    title="No daily slots"
+                    description="This plan did not return a daily_schedule."
+                  />
+                ) : (
+                  plan.daily_schedule.map((slot, idx) => {
+                    const colors = subjectColor(slot.subject || "session");
+                    return (
+                      <div key={slot.slot_id || idx} className="sw-planner-slot">
+                        <div
+                          className="sw-planner-slot-accent"
+                          style={{ background: colors.solid }}
+                          aria-hidden="true"
+                        />
+                        <div className="sw-planner-slot-time">
+                          {slot.start_time} – {slot.end_time}
+                        </div>
+                        <div className="sw-planner-slot-body">
+                          <div className="sw-planner-slot-subject" style={{ color: colors.solid }}>
+                            {slot.subject}
+                          </div>
+                          <div className="sw-planner-slot-focus">{slot.recommended_focus}</div>
+                        </div>
+                        {slot.break_time ? (
+                          <span className="sw-planner-stat-muted">Rest: {slot.break_time}</span>
+                        ) : null}
+                        <Badge variant={statusToBadgeVariant("planned")}>planned</Badge>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             )}
 
-            {/* Weekly View */}
             {activeTab === "weekly" && (
               <div>
-                {Object.entries(plan.weekly_schedule || {}).map(([dayKey, slots]) => (
-                  <div key={dayKey} style={{ marginBottom: "2rem" }}>
-                    <h3 style={{ fontSize: "1.05rem", color: "var(--primary)", borderBottom: "1px solid var(--border)", paddingBottom: "0.5rem" }}>
-                      📅 {dayKey}
-                    </h3>
-                    {slots.map((slot, idx) => (
-                      <div
-                        key={idx}
-                        className="timetable-slot"
-                        style={{ opacity: slot.completed ? 0.6 : 1, textDecoration: slot.completed ? "line-through" : "none" }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                          <input
-                            type="checkbox"
-                            checked={!!slot.completed}
-                            onChange={() => toggleSlotCompleted(dayKey, slot.slot_id)}
-                            style={{ width: "18px", height: "18px", cursor: "pointer" }}
-                          />
-                          <div className="slot-time">
-                            {slot.start_time} - {slot.end_time}
+                {!plan.weekly_schedule || Object.keys(plan.weekly_schedule).length === 0 ? (
+                  <EmptyState
+                    title="No weekly schedule"
+                    description="This plan did not return a weekly_schedule."
+                  />
+                ) : (
+                  Object.entries(plan.weekly_schedule).map(([dayKey, slots]) => (
+                    <div key={dayKey} className="sw-planner-day">
+                      <h3>{dayKey}</h3>
+                      {(slots || []).map((slot, idx) => {
+                        const colors = subjectColor(slot.subject || "session");
+                        const statusLabel = slot.completed ? "completed" : "planned";
+                        return (
+                          <div
+                            key={slot.slot_id || idx}
+                            className={`sw-planner-slot${slot.completed ? " sw-planner-slot--done" : ""}`}
+                          >
+                            <div
+                              className="sw-planner-slot-accent"
+                              style={{ background: colors.solid }}
+                              aria-hidden="true"
+                            />
+                            <div className="sw-planner-check">
+                              <input
+                                type="checkbox"
+                                checked={!!slot.completed}
+                                onChange={() => toggleSlotCompleted(dayKey, slot.slot_id)}
+                                aria-label={`Mark ${slot.subject || "session"} on ${dayKey} complete`}
+                              />
+                              <div className="sw-planner-slot-time">
+                                {slot.start_time} – {slot.end_time}
+                              </div>
+                            </div>
+                            <div className="sw-planner-slot-body">
+                              <div className="sw-planner-slot-subject" style={{ color: colors.solid }}>
+                                {slot.subject}
+                              </div>
+                              <div className="sw-planner-slot-focus">{slot.recommended_focus}</div>
+                            </div>
+                            {slot.break_time ? (
+                              <span className="sw-planner-stat-muted">{slot.break_time}</span>
+                            ) : null}
+                            <Badge variant={statusToBadgeVariant(statusLabel)}>{statusLabel}</Badge>
                           </div>
-                        </div>
-
-                        <div style={{ flex: 1, padding: "0 1.5rem" }}>
-                          <div className="slot-subject">{slot.subject}</div>
-                          <div className="slot-activity">{slot.recommended_focus}</div>
-                        </div>
-
-                        <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                          {slot.break_time}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
+                        );
+                      })}
+                    </div>
+                  ))
+                )}
               </div>
             )}
-          </div>
+          </Card>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

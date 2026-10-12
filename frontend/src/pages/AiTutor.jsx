@@ -1,8 +1,93 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import API from "../services/api";
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorMessage,
+  Input,
+  Skeleton,
+  Textarea,
+} from "../components/ui";
 
 const MAX_QUESTION_LENGTH = 2000;
 const TUTOR_TIMEOUT_MS = 25000;
+
+const EXAMPLE_PROMPTS = [
+  "Explain the difference between supervised and unsupervised learning with a simple example.",
+  "What is a process control block in operating systems, and why does it matter?",
+  "Walk me through Big-O of binary search versus linear search in plain language.",
+];
+
+function formatAnswerParts(text) {
+  if (!text) return [{ type: "text", value: "" }];
+  const parts = [];
+  const fence = /```([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = fence.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
+    }
+    parts.push({ type: "code", value: match[1].replace(/^\w*\n/, "") });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: "text", value: text.slice(lastIndex) });
+  }
+  return parts.length ? parts : [{ type: "text", value: text }];
+}
+
+function renderTextBlock(value, keyPrefix) {
+  const lines = String(value).split("\n");
+  const nodes = [];
+  let listItems = [];
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    nodes.push(
+      <ul key={`${keyPrefix}-ul-${nodes.length}`}>
+        {listItems.map((item, i) => (
+          <li key={`${keyPrefix}-li-${i}`}>{item}</li>
+        ))}
+      </ul>
+    );
+    listItems = [];
+  };
+
+  lines.forEach((line, i) => {
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      listItems.push(bullet[1]);
+      return;
+    }
+    flushList();
+    if (line.trim() === "") {
+      nodes.push(<br key={`${keyPrefix}-br-${i}`} />);
+    } else {
+      nodes.push(<p key={`${keyPrefix}-p-${i}`}>{line}</p>);
+    }
+  });
+  flushList();
+  return nodes;
+}
+
+function MessageBody({ text }) {
+  const parts = formatAnswerParts(text);
+  return (
+    <div className="sw-tutor-bubble-body">
+      {parts.map((part, idx) =>
+        part.type === "code" ? (
+          <pre key={`code-${idx}`}>
+            <code>{part.value}</code>
+          </pre>
+        ) : (
+          <span key={`text-${idx}`}>{renderTextBlock(part.value, `t${idx}`)}</span>
+        )
+      )}
+    </div>
+  );
+}
 
 function AiTutor() {
   const [email, setEmail] = useState(() => localStorage.getItem("student_email") || "");
@@ -169,160 +254,169 @@ function AiTutor() {
     }
   };
 
+  const applyExamplePrompt = (prompt) => {
+    if (asking) return;
+    setQuestion(prompt);
+    setError("");
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  };
+
   return (
-    <div className="page-container tutor-page">
-      <div className="page-header">
-        <h1>AI Study Tutor</h1>
+    <div className="sw-tutor page-container">
+      <section className="sw-tutor-intro" aria-labelledby="tutor-heading">
+        <h2 id="tutor-heading">AI study tutor</h2>
         <p>
           Ask academic questions and get clear, student-friendly explanations.
           Conversation history stays in this browser session and is not saved to the database.
         </p>
-      </div>
+      </section>
 
-      <div className="card tutor-status-card">
-        <div className="tutor-status-row">
+      <Card title="Tutor service">
+        <div className="sw-tutor-status-row">
           <div>
-            <div className="stat-card-title">Tutor Service</div>
             {statusLoading ? (
-              <p style={{ margin: "0.35rem 0 0", color: "var(--text-muted)" }}>Checking configuration...</p>
+              <Skeleton variant="line" />
             ) : status?.configured ? (
-              <p style={{ margin: "0.35rem 0 0" }}>
-                <span className="badge badge-low">Ready</span>{" "}
-                <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
-                  Provider: {status.provider} · Model: {status.model}
-                </span>
+              <p className="sw-tutor-status-meta">
+                <Badge variant="success">Ready</Badge>{" "}
+                Provider: {status.provider}
+                {status.model ? ` · Model: ${status.model}` : ""}
               </p>
             ) : (
-              <p style={{ margin: "0.35rem 0 0" }}>
-                <span className="badge badge-high">Not configured</span>{" "}
-                <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
-                  {status?.message || "Set GEMINI_API_KEY in backend/.env"}
-                </span>
+              <p className="sw-tutor-status-meta">
+                <Badge variant="danger">Not configured</Badge>{" "}
+                {status?.message || "Set GEMINI_API_KEY in backend/.env"}
               </p>
             )}
           </div>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={loadStatus} disabled={statusLoading}>
-            Refresh Status
-          </button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={loadStatus}
+            loading={statusLoading}
+            disabled={statusLoading}
+          >
+            Refresh status
+          </Button>
         </div>
-        {!statusLoading && !status?.configured && (
-          <div className="alert alert-info" style={{ marginTop: "1rem", marginBottom: 0 }}>
+        {!statusLoading && !status?.configured ? (
+          <div className="sw-tutor-config-note">
             To enable live answers, add <code>GEMINI_API_KEY</code> to <code>backend/.env</code>, restart
             uvicorn, then refresh this status. The chat UI still works for testing empty/error handling
             without credentials — responses will show a clear configuration error (not a fake AI answer).
           </div>
-        )}
-      </div>
+        ) : null}
+      </Card>
 
-      <div className="card tutor-chat-card">
-        <div className="tutor-chat-toolbar">
-          <h2 className="card-title" style={{ margin: 0 }}>Conversation</h2>
-          <button
+      <Card>
+        <div className="sw-tutor-toolbar">
+          <h3>Conversation</h3>
+          <Button
             type="button"
-            className="btn btn-secondary btn-sm"
+            variant="secondary"
+            size="sm"
             onClick={handleNewConversation}
             disabled={asking || messages.length === 0}
           >
-            New Conversation
-          </button>
+            New conversation
+          </Button>
         </div>
 
-        <div className="tutor-meta-grid">
-          <div className="form-group">
-            <label htmlFor="tutor-email">Student Email (optional profile context)</label>
-            <input
-              id="tutor-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Uses saved registration email when available"
-            />
-            <span className="form-help">
-              If a profile exists for this email, course/subjects may be used as light context only.
-            </span>
-          </div>
-          <div className="form-group">
-            <label htmlFor="tutor-subject">Subject / Topic (optional)</label>
-            <input
-              id="tutor-subject"
-              type="text"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="e.g. Operating Systems"
-              maxLength={120}
-            />
-          </div>
+        <div className="sw-tutor-meta-grid">
+          <Input
+            id="tutor-email"
+            label="Student email (optional profile context)"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Uses saved registration email when available"
+            hint="If a profile exists for this email, course/subjects may be used as light context only."
+          />
+          <Input
+            id="tutor-subject"
+            label="Subject / topic (optional)"
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="e.g. Operating Systems"
+            maxLength={120}
+          />
         </div>
 
-        {error && (
-          <div className="alert alert-danger tutor-error-banner">
-            <span>{error}</span>
-            {lastFailedQuestion && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={handleRetry}
-                disabled={asking}
-              >
-                Retry
-              </button>
-            )}
-          </div>
-        )}
+        {error ? (
+          <ErrorMessage
+            message={error}
+            onRetry={lastFailedQuestion ? handleRetry : undefined}
+            retryLabel="Retry last question"
+          />
+        ) : null}
 
-        <div className="chat-window tutor-chat-window" aria-live="polite">
+        <div className="sw-tutor-chat" aria-live="polite" aria-relevant="additions">
           {messages.length === 0 && !asking ? (
-            <div className="tutor-empty-state">
-              <p style={{ margin: 0, fontWeight: 600 }}>Start a conversation</p>
-              <p style={{ margin: "0.5rem 0 0", fontSize: "0.9rem" }}>
-                Example: &quot;Explain the difference between supervised and unsupervised learning with a simple example.&quot;
-              </p>
-              <p style={{ margin: "0.75rem 0 0", fontSize: "0.85rem" }}>
-                Tip: Press Enter to send, Shift+Enter for a new line.
-              </p>
+            <div className="sw-tutor-empty">
+              <strong>Start a conversation</strong>
+              <p>Pick an example or type your own academic question below.</p>
+              <p>Tip: Press Enter to send, Shift+Enter for a new line.</p>
+              <div className="sw-tutor-examples">
+                {EXAMPLE_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    className="sw-tutor-example"
+                    onClick={() => applyExamplePrompt(prompt)}
+                    disabled={asking}
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             messages.map((msg, idx) => (
               <div
                 key={`${msg.role}-${idx}`}
-                className={`chat-bubble ${
-                  msg.role === "user" ? "chat-bubble-user" : "chat-bubble-ai"
-                } ${msg.isError ? "chat-bubble-error" : ""}`}
+                className={[
+                  "sw-tutor-bubble",
+                  msg.role === "user" ? "sw-tutor-bubble--user" : "sw-tutor-bubble--assistant",
+                  msg.isError ? "sw-tutor-bubble--error" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
               >
-                <div className="chat-role-label">
+                <div className="sw-tutor-role">
                   {msg.role === "user" ? "You" : msg.isError ? "Tutor error" : "AI Tutor"}
                 </div>
-                <div style={{ whiteSpace: "pre-wrap" }}>{msg.text}</div>
-                {msg.model_used && !msg.isError && (
-                  <div className="chat-meta">
+                <MessageBody text={msg.text} />
+                {msg.model_used && !msg.isError ? (
+                  <div className="sw-tutor-meta">
                     {msg.provider} · {msg.model_used}
                     {msg.profile_context_used ? " · profile context used" : ""}
                   </div>
-                )}
+                ) : null}
               </div>
             ))
           )}
 
-          {asking && (
-            <div className="chat-bubble chat-bubble-ai tutor-loading-bubble" aria-busy="true">
-              <div className="chat-role-label">AI Tutor</div>
-              <div className="tutor-typing">
+          {asking ? (
+            <div className="sw-tutor-loading" aria-busy="true">
+              <div className="sw-tutor-typing" aria-hidden="true">
                 <span />
                 <span />
                 <span />
               </div>
-              Generating a clear explanation...
+              Generating a clear explanation…
             </div>
-          )}
+          ) : null}
           <div ref={chatEndRef} />
         </div>
 
-        <form onSubmit={handleSubmit} className="tutor-composer">
-          <label htmlFor="tutor-question" className="sr-only">
-            Academic question
-          </label>
-          <textarea
+        <form onSubmit={handleSubmit} className="sw-tutor-composer">
+          <Textarea
             id="tutor-question"
+            label="Academic question"
             ref={textareaRef}
             rows={3}
             value={question}
@@ -333,20 +427,21 @@ function AiTutor() {
             maxLength={MAX_QUESTION_LENGTH}
             aria-describedby="tutor-char-count"
           />
-          <div className="tutor-composer-actions">
-            <span id="tutor-char-count" className="form-help">
+          <div className="sw-tutor-composer-actions">
+            <span id="tutor-char-count" className="sw-tutor-char">
               {question.length}/{MAX_QUESTION_LENGTH}
             </span>
-            <button
+            <Button
               type="submit"
-              className="btn btn-primary"
+              variant="primary"
+              loading={asking}
               disabled={asking || !question.trim()}
             >
-              {asking ? "Thinking..." : "Ask Tutor"}
-            </button>
+              {asking ? "Thinking..." : "Ask tutor"}
+            </Button>
           </div>
         </form>
-      </div>
+      </Card>
     </div>
   );
 }

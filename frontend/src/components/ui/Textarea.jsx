@@ -8,6 +8,7 @@ function Textarea({
   className = "",
   disabled = false,
   rows = 4,
+  ref,
   ...rest
 }) {
   const autoId = useId();
@@ -29,6 +30,7 @@ function Textarea({
         </label>
       ) : null}
       <textarea
+        ref={ref}
         id={fieldId}
         className="sw-field-control sw-field-control--textarea"
         disabled={disabled}

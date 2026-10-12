@@ -1,5 +1,18 @@
 import { useState, useEffect } from "react";
 import API from "../services/api";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorMessage,
+  Input,
+  ProgressBar,
+  Select,
+  Skeleton,
+  statusToBadgeVariant,
+  subjectColor,
+} from "../components/ui";
 
 const SESSION_STATUSES = [
   { value: "completed", label: "Completed" },
@@ -38,12 +51,6 @@ function ProgressTracking() {
   const [adapting, setAdapting] = useState(false);
   const [adaptResult, setAdaptResult] = useState(null);
 
-  useEffect(() => {
-    if (email) {
-      fetchDashboard(email);
-    }
-  }, []);
-
   const fetchDashboard = async (studentEmail) => {
     const trimmed = (studentEmail || "").trim();
     if (!trimmed) {
@@ -74,6 +81,24 @@ function ProgressTracking() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!email) return undefined;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (!cancelled) {
+        void fetchDashboard(email);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // Initial hydrate only — email is seeded from localStorage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleLoad = (e) => {
     e.preventDefault();
@@ -172,152 +197,267 @@ function ProgressTracking() {
   const pva = summary?.planned_versus_actual;
   const empty = summary?.empty;
 
+  const actualHours =
+    summary?.actual_study_hours !== undefined && summary?.actual_study_hours !== null
+      ? summary.actual_study_hours
+      : summary?.total_study_hours !== undefined && summary?.total_study_hours !== null
+        ? summary.total_study_hours
+        : null;
+  const plannedHours =
+    summary?.planned_study_hours !== undefined && summary?.planned_study_hours !== null
+      ? summary.planned_study_hours
+      : null;
+  const totalSessions =
+    summary?.total_sessions !== undefined && summary?.total_sessions !== null
+      ? summary.total_sessions
+      : null;
+  const sessionsCompleted =
+    summary?.sessions_completed !== undefined && summary?.sessions_completed !== null
+      ? summary.sessions_completed
+      : null;
+  const sessionsPartial =
+    summary?.sessions_partial !== undefined && summary?.sessions_partial !== null
+      ? summary.sessions_partial
+      : null;
+  const sessionsMissed =
+    summary?.sessions_missed !== undefined && summary?.sessions_missed !== null
+      ? summary.sessions_missed
+      : null;
+  const completionRate =
+    summary?.completion_rate_percent !== undefined && summary?.completion_rate_percent !== null
+      ? summary.completion_rate_percent
+      : null;
+  const fulfillment =
+    pva?.fulfillment_percent !== undefined && pva?.fulfillment_percent !== null
+      ? pva.fulfillment_percent
+      : null;
+
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1>Progress Tracking</h1>
+    <div className="sw-progress-page page-container">
+      <section className="sw-progress-intro" aria-labelledby="progress-heading">
+        <h2 id="progress-heading">Progress tracking</h2>
         <p>
           Record completed, partial, and missed study sessions. Compare planned versus actual
           study time and review subject-wise completion rates for your account.
         </p>
-      </div>
+      </section>
 
-      <form className="card" onSubmit={handleLoad} style={{ marginBottom: "1.25rem" }}>
-        <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-          <label htmlFor="progress-email">Student email</label>
-          <input
+      <Card title="Load progress">
+        <form className="sw-progress-load" onSubmit={handleLoad}>
+          <Input
             id="progress-email"
+            label="Student email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@college.edu"
             required
           />
+          <Button type="submit" variant="secondary" loading={loading} disabled={loading}>
+            {loading ? "Loading..." : "Load my progress"}
+          </Button>
+        </form>
+      </Card>
+
+      {message ? (
+        <div className="sw-progress-success" role="status">
+          {message}
         </div>
-        <button type="submit" className="btn btn-secondary" disabled={loading}>
-          {loading ? "Loading..." : "Load My Progress"}
-        </button>
-      </form>
+      ) : null}
 
-      {message && <div className="alert alert-success">{message}</div>}
-      {error && <div className="alert alert-danger">{error}</div>}
+      {error ? (
+        <ErrorMessage
+          message={typeof error === "string" ? error : "Something went wrong."}
+          onRetry={email.trim() ? () => fetchDashboard(email.trim()) : undefined}
+          retryLabel="Retry load"
+        />
+      ) : null}
 
-      {loading && !summary && (
-        <p style={{ color: "var(--text-muted)" }}>Loading progress summary...</p>
-      )}
-
-      {!loading && empty && (
-        <div className="alert alert-info">
-          No sessions or quizzes logged yet for this account. Record a study session below to
-          start tracking planned versus actual hours.
+      {loading && !summary ? (
+        <div aria-busy="true" aria-label="Loading progress">
+          <Skeleton variant="card" />
+          <Skeleton variant="block" />
         </div>
-      )}
+      ) : null}
 
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-card-title">Actual Study Time</div>
-          <div className="stat-card-value">
-            {summary?.actual_study_hours ?? summary?.total_study_hours ?? 0}{" "}
-            <span style={{ fontSize: "1rem", color: "var(--text-muted)" }}>hrs</span>
-          </div>
-          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
-            Planned: {summary?.planned_study_hours ?? 0} hrs
-          </div>
-        </div>
+      {!loading && empty ? (
+        <EmptyState
+          title="No sessions or quizzes yet"
+          description="No sessions or quizzes logged yet for this account. Record a study session below to start tracking planned versus actual hours."
+        />
+      ) : null}
 
-        <div className="stat-card">
-          <div className="stat-card-title">Sessions</div>
-          <div className="stat-card-value">{summary?.total_sessions ?? 0}</div>
-          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
-            Done {summary?.sessions_completed ?? 0} · Partial {summary?.sessions_partial ?? 0} ·
-            Missed {summary?.sessions_missed ?? 0}
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-card-title">Completion Rate</div>
-          <div className="stat-card-value">
-            {summary ? `${summary.completion_rate_percent ?? 0}%` : "—"}
-          </div>
-          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
-            Plan fulfillment: {pva?.fulfillment_percent ?? 0}%
-          </div>
-        </div>
-
-        <div className="stat-card" style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleAdaptPlan}
-            disabled={adapting || !email.trim()}
-          >
-            {adapting ? "Adapting..." : "Adapt from Progress"}
-          </button>
-          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.4rem", textAlign: "center" }}>
-            Uses missed/partial sessions &amp; planned vs actual (M18)
-          </span>
-        </div>
-      </div>
-
-      {adaptResult && (
-        <div className="card" style={{ borderLeft: "4px solid var(--accent)" }}>
-          <h3 style={{ margin: "0 0 0.5rem 0" }}>Adaptive Adjustments</h3>
-          <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
-            {adaptResult.adaptations?.map((note, i) => (
-              <li key={i}>{note}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="card">
-        <h2 className="card-title">Subject-wise Progress</h2>
-        {!summary?.subject_metrics?.length ? (
-          <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
-            No subject data yet. Log a session or quiz to populate this section.
-          </p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-            {summary.subject_metrics.map((subj, idx) => (
-              <div key={idx} style={{ background: "var(--bg-muted, #f8fafc)", padding: "1rem", borderRadius: "8px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem", flexWrap: "wrap", gap: "0.5rem" }}>
-                  <strong>{subj.subject}</strong>
-                  <span style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
-                    Actual {subj.actual_hours ?? subj.hours_studied ?? 0} / Planned {subj.planned_hours ?? 0} hrs
-                    {" · "}
-                    Completion {subj.completion_rate_percent ?? 0}%
-                    {subj.average_quiz_score != null ? ` · Quiz ${subj.average_quiz_score}%` : ""}
-                  </span>
-                </div>
-                <div className="progress-bar-container">
-                  <div
-                    className="progress-bar-fill"
-                    style={{
-                      width: `${Math.min(100, subj.completion_rate_percent || 0)}%`,
-                      backgroundColor:
-                        (subj.completion_rate_percent || 0) < 50
-                          ? "var(--danger)"
-                          : (subj.completion_rate_percent || 0) < 80
-                          ? "var(--warning)"
-                          : "var(--success)",
-                    }}
-                  />
-                </div>
-                <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
-                  {subj.sessions_completed ?? 0} completed · {subj.sessions_partial ?? 0} partial ·{" "}
-                  {subj.sessions_missed ?? 0} missed
-                </div>
+      {summary ? (
+        <div className="sw-progress-stats">
+          <Card title="Actual study time">
+            {actualHours !== null ? (
+              <div className="sw-progress-stat-value">
+                {actualHours}
+                <span className="sw-progress-stat-muted"> hrs</span>
               </div>
-            ))}
+            ) : (
+              <p className="sw-progress-stat-na">Not available</p>
+            )}
+            <div className="sw-progress-stat-muted">
+              Planned: {plannedHours !== null ? `${plannedHours} hrs` : "Not available"}
+            </div>
+          </Card>
+
+          <Card title="Sessions">
+            {totalSessions !== null ? (
+              <div className="sw-progress-stat-value">{totalSessions}</div>
+            ) : (
+              <p className="sw-progress-stat-na">Not available</p>
+            )}
+            <div className="sw-progress-stat-muted">
+              Done {sessionsCompleted !== null ? sessionsCompleted : "—"} · Partial{" "}
+              {sessionsPartial !== null ? sessionsPartial : "—"} · Missed{" "}
+              {sessionsMissed !== null ? sessionsMissed : "—"}
+            </div>
+          </Card>
+
+          <Card title="Completion rate">
+            {completionRate !== null ? (
+              <div className="sw-progress-stat-value">{completionRate}%</div>
+            ) : (
+              <p className="sw-progress-stat-na">Not available</p>
+            )}
+            <div className="sw-progress-stat-muted">
+              Plan fulfillment: {fulfillment !== null ? `${fulfillment}%` : "Not available"}
+            </div>
+          </Card>
+
+          <Card title="Adaptive planning">
+            <Button
+              type="button"
+              variant="primary"
+              loading={adapting}
+              disabled={adapting || !email.trim()}
+              onClick={handleAdaptPlan}
+            >
+              {adapting ? "Adapting..." : "Adapt from progress"}
+            </Button>
+            <p className="sw-progress-stat-muted" style={{ marginTop: "0.5rem" }}>
+              Uses missed/partial sessions and planned vs actual (M18)
+            </p>
+          </Card>
+        </div>
+      ) : null}
+
+      {adaptResult ? (
+        <Card title="Adaptive adjustments" className="sw-progress-adapt-card">
+          {adaptResult.adaptations?.length ? (
+            <ul className="sw-progress-adapt-list">
+              {adaptResult.adaptations.map((note, i) => (
+                <li key={i}>{note}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="sw-progress-stat-muted">
+              {adaptResult.message || "Adaptation completed with no detailed notes."}
+            </p>
+          )}
+        </Card>
+      ) : null}
+
+      {summary && pva ? (
+        <Card title="Planned versus actual">
+          <div className="sw-progress-pva">
+            {pva.planned_minutes !== undefined && pva.planned_minutes !== null ? (
+              <div className="sw-progress-pva-item">
+                <span className="sw-progress-stat-muted">Planned minutes</span>
+                <strong>{pva.planned_minutes}</strong>
+              </div>
+            ) : null}
+            {pva.actual_minutes !== undefined && pva.actual_minutes !== null ? (
+              <div className="sw-progress-pva-item">
+                <span className="sw-progress-stat-muted">Actual minutes</span>
+                <strong>{pva.actual_minutes}</strong>
+              </div>
+            ) : null}
+            {pva.planned_hours !== undefined && pva.planned_hours !== null ? (
+              <div className="sw-progress-pva-item">
+                <span className="sw-progress-stat-muted">Planned hours</span>
+                <strong>{pva.planned_hours}</strong>
+              </div>
+            ) : null}
+            {pva.actual_hours !== undefined && pva.actual_hours !== null ? (
+              <div className="sw-progress-pva-item">
+                <span className="sw-progress-stat-muted">Actual hours</span>
+                <strong>{pva.actual_hours}</strong>
+              </div>
+            ) : null}
+            {fulfillment !== null ? (
+              <div className="sw-progress-pva-item">
+                <span className="sw-progress-stat-muted">Fulfillment</span>
+                <strong>{fulfillment}%</strong>
+              </div>
+            ) : null}
+          </div>
+        </Card>
+      ) : null}
+
+      <Card title="Subject-wise progress">
+        {!summary?.subject_metrics?.length ? (
+          <EmptyState
+            title="No subject data yet"
+            description="Log a session or quiz to populate subject completion rates."
+          />
+        ) : (
+          <div className="sw-progress-subjects">
+            {summary.subject_metrics.map((subj, idx) => {
+              const colors = subjectColor(subj.subject || `subject-${idx}`);
+              const rate =
+                subj.completion_rate_percent !== undefined && subj.completion_rate_percent !== null
+                  ? Number(subj.completion_rate_percent)
+                  : null;
+              const actualSubj =
+                subj.actual_hours !== undefined && subj.actual_hours !== null
+                  ? subj.actual_hours
+                  : subj.hours_studied !== undefined && subj.hours_studied !== null
+                    ? subj.hours_studied
+                    : null;
+              const plannedSubj =
+                subj.planned_hours !== undefined && subj.planned_hours !== null
+                  ? subj.planned_hours
+                  : null;
+              return (
+                <div key={idx} className="sw-progress-subj">
+                  <div className="sw-progress-subj-head">
+                    <strong style={{ color: colors.solid }}>{subj.subject}</strong>
+                    <span className="sw-progress-stat-muted">
+                      Actual {actualSubj !== null ? actualSubj : "—"} / Planned{" "}
+                      {plannedSubj !== null ? plannedSubj : "—"} hrs
+                      {rate !== null && !Number.isNaN(rate) ? ` · Completion ${rate}%` : ""}
+                      {subj.average_quiz_score != null
+                        ? ` · Quiz ${subj.average_quiz_score}%`
+                        : ""}
+                    </span>
+                  </div>
+                  {rate !== null && !Number.isNaN(rate) ? (
+                    <ProgressBar
+                      value={Math.min(100, Math.max(0, rate))}
+                      label={`${subj.subject} completion`}
+                      color={rate < 50 ? "danger" : rate < 80 ? "warning" : "success"}
+                    />
+                  ) : (
+                    <p className="sw-progress-stat-muted">Completion rate not available</p>
+                  )}
+                  <div className="sw-progress-stat-muted" style={{ marginTop: "0.5rem" }}>
+                    {subj.sessions_completed ?? 0} completed · {subj.sessions_partial ?? 0}{" "}
+                    partial · {subj.sessions_missed ?? 0} missed
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
-      </div>
+      </Card>
 
-      {summary?.recent_sessions?.length > 0 && (
-        <div className="card">
-          <h2 className="card-title">Recent Sessions</h2>
-          <div className="table-responsive">
-            <table className="data-table">
+      {summary?.recent_sessions?.length > 0 ? (
+        <Card title="Recent sessions">
+          <div className="sw-progress-table-wrap">
+            <table className="sw-progress-table">
               <thead>
                 <tr>
                   <th>Date</th>
@@ -332,10 +472,12 @@ function ProgressTracking() {
                 {summary.recent_sessions.map((s, idx) => (
                   <tr key={s.session_id || idx}>
                     <td>{s.date || "—"}</td>
-                    <td>{s.subject}</td>
+                    <td style={{ color: subjectColor(s.subject || "session").solid }}>
+                      {s.subject}
+                    </td>
                     <td>{s.topic || "—"}</td>
                     <td>
-                      <span className="badge badge-medium">{s.status}</span>
+                      <Badge variant={statusToBadgeVariant(s.status)}>{s.status}</Badge>
                     </td>
                     <td>{s.planned_minutes ?? "—"} min</td>
                     <td>{s.actual_minutes ?? 0} min</td>
@@ -344,168 +486,143 @@ function ProgressTracking() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        </Card>
+      ) : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2rem" }}>
-        <div className="card">
-          <h2 className="card-title">Log Study Session</h2>
+      <div className="sw-progress-forms">
+        <Card title="Log study session">
           <form onSubmit={handleLogSession}>
-            <div className="form-group" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="sess-subject">Subject</label>
-              <input
-                id="sess-subject"
-                type="text"
-                value={sessionForm.subject}
-                onChange={(e) => setSessionForm({ ...sessionForm, subject: e.target.value })}
+            <Input
+              id="sess-subject"
+              label="Subject"
+              type="text"
+              value={sessionForm.subject}
+              onChange={(e) => setSessionForm({ ...sessionForm, subject: e.target.value })}
+              required
+            />
+            <Input
+              id="sess-topic"
+              label="Topic"
+              type="text"
+              value={sessionForm.topic}
+              onChange={(e) => setSessionForm({ ...sessionForm, topic: e.target.value })}
+            />
+            <Select
+              id="sess-status"
+              label="Outcome"
+              value={sessionForm.status}
+              onChange={(e) => {
+                const status = e.target.value;
+                setSessionForm((prev) => ({
+                  ...prev,
+                  status,
+                  actual_minutes:
+                    status === "missed"
+                      ? 0
+                      : status === "partial"
+                        ? Math.max(1, Math.floor(Number(prev.planned_minutes) / 2))
+                        : prev.planned_minutes,
+                }));
+              }}
+            >
+              {SESSION_STATUSES.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </Select>
+            <div className="sw-progress-form-row">
+              <Input
+                id="sess-planned"
+                label="Planned (min)"
+                type="number"
+                min="1"
+                max="600"
+                value={sessionForm.planned_minutes}
+                onChange={(e) =>
+                  setSessionForm({ ...sessionForm, planned_minutes: e.target.value })
+                }
                 required
               />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="sess-topic">Topic</label>
-              <input
-                id="sess-topic"
-                type="text"
-                value={sessionForm.topic}
-                onChange={(e) => setSessionForm({ ...sessionForm, topic: e.target.value })}
+              <Input
+                id="sess-actual"
+                label="Actual (min)"
+                type="number"
+                min="0"
+                max="600"
+                value={sessionForm.actual_minutes}
+                onChange={(e) =>
+                  setSessionForm({ ...sessionForm, actual_minutes: e.target.value })
+                }
+                disabled={sessionForm.status === "missed"}
+                required={sessionForm.status !== "missed"}
               />
             </div>
-
-            <div className="form-group" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="sess-status">Outcome</label>
-              <select
-                id="sess-status"
-                value={sessionForm.status}
-                onChange={(e) => {
-                  const status = e.target.value;
-                  setSessionForm((prev) => ({
-                    ...prev,
-                    status,
-                    actual_minutes:
-                      status === "missed" ? 0 : status === "partial" ? Math.max(1, Math.floor(Number(prev.planned_minutes) / 2)) : prev.planned_minutes,
-                  }));
-                }}
-              >
-                {SESSION_STATUSES.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
-              <div className="form-group">
-                <label htmlFor="sess-planned">Planned (min)</label>
-                <input
-                  id="sess-planned"
-                  type="number"
-                  min="1"
-                  max="600"
-                  value={sessionForm.planned_minutes}
-                  onChange={(e) => setSessionForm({ ...sessionForm, planned_minutes: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="sess-actual">Actual (min)</label>
-                <input
-                  id="sess-actual"
-                  type="number"
-                  min="0"
-                  max="600"
-                  value={sessionForm.actual_minutes}
-                  onChange={(e) => setSessionForm({ ...sessionForm, actual_minutes: e.target.value })}
-                  disabled={sessionForm.status === "missed"}
-                  required={sessionForm.status !== "missed"}
-                />
-              </div>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: "1.25rem" }}>
-              <label htmlFor="sess-date">Date</label>
-              <input
-                id="sess-date"
-                type="date"
-                value={sessionForm.date}
-                onChange={(e) => setSessionForm({ ...sessionForm, date: e.target.value })}
-                required
-              />
-            </div>
-
-            <button type="submit" className="btn btn-primary" style={{ width: "100%" }}>
-              Record Study Session
-            </button>
+            <Input
+              id="sess-date"
+              label="Date"
+              type="date"
+              value={sessionForm.date}
+              onChange={(e) => setSessionForm({ ...sessionForm, date: e.target.value })}
+              required
+            />
+            <Button type="submit" variant="primary" style={{ width: "100%" }}>
+              Record study session
+            </Button>
           </form>
-        </div>
+        </Card>
 
-        <div className="card">
-          <h2 className="card-title">Record Quiz Score</h2>
+        <Card title="Record quiz score">
           <form onSubmit={handleLogQuiz}>
-            <div className="form-group" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="quiz-subject">Subject</label>
-              <input
-                id="quiz-subject"
-                type="text"
-                value={quizForm.subject}
-                onChange={(e) => setQuizForm({ ...quizForm, subject: e.target.value })}
+            <Input
+              id="quiz-subject"
+              label="Subject"
+              type="text"
+              value={quizForm.subject}
+              onChange={(e) => setQuizForm({ ...quizForm, subject: e.target.value })}
+              required
+            />
+            <Input
+              id="quiz-title"
+              label="Quiz title"
+              type="text"
+              value={quizForm.quiz_title}
+              onChange={(e) => setQuizForm({ ...quizForm, quiz_title: e.target.value })}
+              required
+            />
+            <div className="sw-progress-form-row">
+              <Input
+                id="quiz-score"
+                label="Marks scored"
+                type="number"
+                min="0"
+                value={quizForm.score}
+                onChange={(e) => setQuizForm({ ...quizForm, score: e.target.value })}
+                required
+              />
+              <Input
+                id="quiz-total"
+                label="Total marks"
+                type="number"
+                min="1"
+                value={quizForm.total_marks}
+                onChange={(e) => setQuizForm({ ...quizForm, total_marks: e.target.value })}
                 required
               />
             </div>
-
-            <div className="form-group" style={{ marginBottom: "1rem" }}>
-              <label htmlFor="quiz-title">Quiz Title</label>
-              <input
-                id="quiz-title"
-                type="text"
-                value={quizForm.quiz_title}
-                onChange={(e) => setQuizForm({ ...quizForm, quiz_title: e.target.value })}
-                required
-              />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
-              <div className="form-group">
-                <label htmlFor="quiz-score">Marks Scored</label>
-                <input
-                  id="quiz-score"
-                  type="number"
-                  min="0"
-                  value={quizForm.score}
-                  onChange={(e) => setQuizForm({ ...quizForm, score: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="quiz-total">Total Marks</label>
-                <input
-                  id="quiz-total"
-                  type="number"
-                  min="1"
-                  value={quizForm.total_marks}
-                  onChange={(e) => setQuizForm({ ...quizForm, total_marks: e.target.value })}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: "1.25rem" }}>
-              <label htmlFor="quiz-date">Date</label>
-              <input
-                id="quiz-date"
-                type="date"
-                value={quizForm.date}
-                onChange={(e) => setQuizForm({ ...quizForm, date: e.target.value })}
-                required
-              />
-            </div>
-
-            <button type="submit" className="btn btn-primary" style={{ width: "100%" }}>
-              Record Quiz Score
-            </button>
+            <Input
+              id="quiz-date"
+              label="Date"
+              type="date"
+              value={quizForm.date}
+              onChange={(e) => setQuizForm({ ...quizForm, date: e.target.value })}
+              required
+            />
+            <Button type="submit" variant="primary" style={{ width: "100%" }}>
+              Record quiz score
+            </Button>
           </form>
-        </div>
+        </Card>
       </div>
     </div>
   );

@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import API from "../services/api";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorMessage,
+  Input,
+  Modal,
+  Select,
+  Skeleton,
+  Textarea,
+} from "./ui";
 
 const DEFAULT_MAX_MB = 10;
 
@@ -10,10 +22,22 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function statusBadgeClass(status) {
-  if (status === "processed") return "badge-low";
-  if (status === "processed_no_text") return "badge-medium";
-  return "badge-high";
+function processingStatusVariant(status) {
+  const value = String(status || "").toLowerCase();
+  if (value === "processed") return "success";
+  if (value === "processed_no_text") return "warning";
+  if (value.includes("fail") || value.includes("error")) return "danger";
+  if (value.includes("process") || value.includes("pending")) return "info";
+  return "neutral";
+}
+
+function ragStatusVariant(status) {
+  const value = String(status || "not_indexed").toLowerCase();
+  if (value === "indexed") return "success";
+  if (value === "index_failed" || value.includes("fail")) return "danger";
+  if (value === "not_indexable") return "warning";
+  if (value.includes("process") || value === "indexing") return "info";
+  return "neutral";
 }
 
 /**
@@ -44,6 +68,11 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
   const [ragAsking, setRagAsking] = useState(false);
   const [ragAnswer, setRagAnswer] = useState(null);
   const [ragError, setRagError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [previewId, setPreviewId] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+  const [previewError, setPreviewError] = useState("");
   const fileInputRef = useRef(null);
 
   const loadLimits = useCallback(async () => {
@@ -206,11 +235,13 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
     }
   };
 
-  const handleDelete = async (documentId) => {
+  const confirmDelete = async () => {
+    const documentId = deleteTarget?.document_id;
     if (!email || !documentId) return;
     setDeletingId(documentId);
     setError("");
     setMessage("");
+    setDeleteTarget(null);
     try {
       await API.delete(`/documents/${encodeURIComponent(documentId)}`, {
         params: { email }
@@ -219,6 +250,11 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
       if (ragDocumentId === documentId) {
         setRagDocumentId("");
         setRagAnswer(null);
+      }
+      if (previewId === documentId) {
+        setPreviewId("");
+        setPreviewData(null);
+        setPreviewError("");
       }
       await loadDocuments(email);
     } catch (err) {
@@ -246,6 +282,30 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
       setError(err.response?.data?.detail || "Failed to index document for RAG.");
     } finally {
       setIndexingId("");
+    }
+  };
+
+  const handlePreview = async (documentId) => {
+    if (!email || !documentId) return;
+    if (previewId === documentId) {
+      setPreviewId("");
+      setPreviewData(null);
+      setPreviewError("");
+      return;
+    }
+    setPreviewId(documentId);
+    setPreviewLoading(true);
+    setPreviewError("");
+    setPreviewData(null);
+    try {
+      const res = await API.get(`/documents/${encodeURIComponent(documentId)}/text`, {
+        params: { email }
+      });
+      setPreviewData(res.data);
+    } catch (err) {
+      setPreviewError(err.response?.data?.detail || "Failed to load extracted text.");
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -288,71 +348,81 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
     }
   };
 
+  const maxMb = limits.max_upload_mb || DEFAULT_MAX_MB;
+
   return (
-    <div className={compact ? "pdf-panel pdf-panel-compact" : "pdf-panel"}>
-      {!compact && (
-        <div className="page-header" style={{ marginBottom: "1.25rem" }}>
-          <h1>Study Materials (PDF)</h1>
+    <div className={compact ? "sw-pdf-panel sw-pdf-panel-compact" : "sw-pdf-panel"}>
+      {!compact ? (
+        <div className="sw-docs-intro">
+          <h2>Study materials (PDF)</h2>
           <p>
-            Upload PDF notes for secure storage and text extraction. Extracted text is saved for future
-            note-based tutoring (M16). Maximum size: {limits.max_upload_mb || DEFAULT_MAX_MB} MB.
+            Upload PDF notes for secure storage and text extraction. Extracted text is saved for
+            note-based tutoring. Maximum size: {maxMb} MB · PDF only.
           </p>
         </div>
-      )}
-
-      {compact && (
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-          <h2 className="card-title" style={{ margin: 0 }}>Study Materials (PDF)</h2>
-          <span className="badge badge-info">Max {limits.max_upload_mb || DEFAULT_MAX_MB} MB · PDF only</span>
+      ) : (
+        <div className="sw-pdf-compact-head">
+          <h3>Study materials (PDF)</h3>
+          <Badge variant="info">Max {maxMb} MB · PDF only</Badge>
         </div>
       )}
 
-      {message && <div className="alert alert-success">{message}</div>}
-      {error && (
-        <div className="alert alert-danger" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
-          <span>{error}</span>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadDocuments(email)} disabled={loadingList}>
-            Retry
-          </button>
+      {message ? (
+        <div className="sw-pdf-success" role="status">
+          {message}
         </div>
-      )}
+      ) : null}
 
-      <form onSubmit={handleUpload} className="pdf-upload-form">
-        {!emailProp && (
-          <div className="form-group" style={{ marginBottom: "1rem" }}>
-            <label htmlFor="pdf-email">Student Email *</label>
-            <input
-              id="pdf-email"
-              type="email"
-              value={localEmail}
-              onChange={(e) => setLocalEmail(e.target.value)}
-              placeholder="student@example.edu"
-              required
-            />
-          </div>
-        )}
+      {error ? (
+        <ErrorMessage
+          message={typeof error === "string" ? error : "Something went wrong."}
+          onRetry={email ? () => loadDocuments(email) : undefined}
+          retryLabel="Retry load"
+        />
+      ) : null}
 
-        <div className="form-group" style={{ marginBottom: "1rem" }}>
-          <label htmlFor="pdf-subject">Subject / Topic tag</label>
-          <input
-            id="pdf-subject"
-            type="text"
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder="e.g. Database Systems"
-            maxLength={120}
+      <form onSubmit={handleUpload}>
+        {!emailProp ? (
+          <Input
+            id="pdf-email"
+            label="Student email"
+            type="email"
+            value={localEmail}
+            onChange={(e) => setLocalEmail(e.target.value)}
+            placeholder="student@example.edu"
+            required
           />
-        </div>
+        ) : null}
+
+        <Input
+          id="pdf-subject"
+          label="Subject / topic tag"
+          type="text"
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          placeholder="e.g. Database Systems"
+          maxLength={120}
+        />
 
         <div
-          className={`pdf-dropzone ${dragActive ? "pdf-dropzone-active" : ""}`}
-          onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
-          onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-          onDragLeave={(e) => { e.preventDefault(); setDragActive(false); }}
+          className={`sw-pdf-dropzone${dragActive ? " sw-pdf-dropzone--active" : ""}`}
+          onDragEnter={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+          }}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
           role="button"
           tabIndex={0}
+          aria-label="Choose a PDF file to upload"
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
@@ -368,200 +438,264 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
             style={{ display: "none" }}
           />
           <strong>Drag & drop a PDF here</strong>
-          <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
-            or click to browse · PDF only · max {limits.max_upload_mb || DEFAULT_MAX_MB} MB
+          <span className="sw-pdf-dropzone-hint">
+            or click to browse · PDF only · max {maxMb} MB
           </span>
-          {selectedFile && (
-            <span style={{ marginTop: "0.5rem", fontWeight: 600 }}>
+          {selectedFile ? (
+            <span className="sw-pdf-selected">
               Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})
             </span>
-          )}
+          ) : null}
         </div>
 
-        <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem", flexWrap: "wrap" }}>
-          <button type="submit" className="btn btn-primary" disabled={uploading || !selectedFile}>
+        <div className="sw-pdf-upload-actions">
+          <Button
+            type="submit"
+            variant="primary"
+            loading={uploading}
+            disabled={uploading || !selectedFile}
+          >
             {uploading ? "Uploading & extracting..." : "Upload PDF"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="btn btn-secondary"
+            variant="secondary"
             onClick={() => loadDocuments(email)}
+            loading={loadingList}
             disabled={loadingList || !email}
           >
-            {loadingList ? "Refreshing..." : "Refresh List"}
-          </button>
+            {loadingList ? "Refreshing..." : "Refresh list"}
+          </Button>
         </div>
       </form>
 
-      <div style={{ marginTop: "1.75rem" }}>
-        <h3 style={{ fontSize: "1.05rem", marginBottom: "0.75rem" }}>
-          Uploaded documents {documents.length > 0 ? `(${documents.length})` : ""}
-        </h3>
+      <h3 className="sw-pdf-section-title">
+        Uploaded documents {documents.length > 0 ? `(${documents.length})` : ""}
+      </h3>
 
-        {loadingList && documents.length === 0 ? (
-          <p style={{ color: "var(--text-muted)" }}>Loading documents...</p>
-        ) : documents.length === 0 ? (
-          <div className="empty-state-inline">
-            <p style={{ color: "var(--text-muted)", margin: 0 }}>
-              No PDFs uploaded yet for this email. Upload a study PDF, then ask grounded questions below.
-            </p>
-          </div>
-        ) : (
-          <div className="table-responsive">
-            <table className="styled-table">
-              <thead>
-                <tr>
-                  <th>Filename</th>
-                  <th>Status</th>
-                  <th>RAG</th>
-                  <th>Pages</th>
-                  <th>Text</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {documents.map((doc) => (
-                  <tr key={doc.document_id}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{doc.filename}</div>
-                      <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-                        {doc.subject || "General"}
-                        {doc.ocr_required ? " · OCR required (no extractable text)" : ""}
+      {loadingList && documents.length === 0 ? (
+        <div aria-busy="true" aria-label="Loading documents">
+          <Skeleton variant="card" />
+          <Skeleton variant="block" />
+        </div>
+      ) : documents.length === 0 ? (
+        <EmptyState
+          title="No PDFs uploaded yet"
+          description="Upload a study PDF for this email, then index it and ask grounded questions below."
+        />
+      ) : (
+        <div className="sw-pdf-doc-grid">
+          {documents.map((doc) => {
+            const ragStatus = doc.rag_status || "not_indexed";
+            const isPreviewOpen = previewId === doc.document_id;
+            return (
+              <div key={doc.document_id} className="sw-pdf-doc-card">
+                <div className="sw-pdf-doc-head">
+                  <div className="sw-pdf-doc-name">{doc.filename}</div>
+                  <div className="sw-pdf-doc-badges">
+                    <Badge variant={processingStatusVariant(doc.status)}>{doc.status}</Badge>
+                    <Badge variant={ragStatusVariant(ragStatus)}>{ragStatus}</Badge>
+                  </div>
+                </div>
+                <div className="sw-pdf-doc-meta">
+                  {doc.subject || "General"}
+                  {doc.page_count != null ? ` · ${doc.page_count} page(s)` : ""}
+                  {doc.text_available
+                    ? ` · ${doc.extracted_characters} chars extracted`
+                    : " · Text not available"}
+                  {doc.rag_chunk_count ? ` · ${doc.rag_chunk_count} RAG chunks` : ""}
+                  {doc.ocr_required ? " · OCR required" : ""}
+                  {doc.file_size_bytes != null
+                    ? ` · ${formatBytes(doc.file_size_bytes)}`
+                    : ""}
+                </div>
+                <div className="sw-pdf-doc-actions">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleIndex(doc.document_id)}
+                    loading={indexingId === doc.document_id}
+                    disabled={!doc.text_available || indexingId === doc.document_id}
+                  >
+                    {indexingId === doc.document_id ? "Indexing..." : "Index"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setRagDocumentId(doc.document_id)}
+                  >
+                    Ask
+                  </Button>
+                  {doc.text_available ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handlePreview(doc.document_id)}
+                      loading={isPreviewOpen && previewLoading}
+                    >
+                      {isPreviewOpen ? "Hide text" : "Preview text"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setDeleteTarget(doc)}
+                    disabled={deletingId === doc.document_id}
+                    loading={deletingId === doc.document_id}
+                  >
+                    Delete
+                  </Button>
+                </div>
+                {isPreviewOpen ? (
+                  <div>
+                    {previewLoading ? (
+                      <Skeleton variant="block" />
+                    ) : previewError ? (
+                      <ErrorMessage
+                        message={previewError}
+                        onRetry={() => handlePreview(doc.document_id)}
+                        retryLabel="Retry preview"
+                      />
+                    ) : previewData?.text_available && previewData?.pages?.length ? (
+                      <div className="sw-pdf-preview" aria-label="Extracted text preview">
+                        {previewData.pages.slice(0, 3).map((page, idx) => (
+                          <div key={page.page ?? idx} className="sw-pdf-preview-page">
+                            <strong>Page {page.page ?? idx + 1}</strong>
+                            {(page.text || "").slice(0, 600)}
+                            {(page.text || "").length > 600 ? "…" : ""}
+                          </div>
+                        ))}
+                        {previewData.pages.length > 3 ? (
+                          <div className="sw-pdf-doc-meta">
+                            Showing first 3 of {previewData.pages.length} pages from the API.
+                          </div>
+                        ) : null}
                       </div>
-                    </td>
-                    <td>
-                      <span className={`badge ${statusBadgeClass(doc.status)}`}>{doc.status}</span>
-                    </td>
-                    <td>
-                      <span className={`badge ${doc.rag_status === "indexed" ? "badge-low" : "badge-medium"}`}>
-                        {doc.rag_status || "not_indexed"}
-                      </span>
-                      {doc.rag_chunk_count ? (
-                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                          {doc.rag_chunk_count} chunks
-                        </div>
-                      ) : null}
-                    </td>
-                    <td>{doc.page_count ?? "—"}</td>
-                    <td>
-                      {doc.text_available
-                        ? `${doc.extracted_characters} chars`
-                        : "Not available"}
-                    </td>
-                    <td>
-                      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => handleIndex(doc.document_id)}
-                          disabled={!doc.text_available || indexingId === doc.document_id}
-                        >
-                          {indexingId === doc.document_id ? "Indexing..." : "Index"}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => setRagDocumentId(doc.document_id)}
-                        >
-                          Ask
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          style={{ color: "var(--danger)" }}
-                          onClick={() => handleDelete(doc.document_id)}
-                          disabled={deletingId === doc.document_id}
-                        >
-                          {deletingId === doc.document_id ? "Deleting..." : "Delete"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                    ) : (
+                      <p className="sw-pdf-doc-meta">
+                        {previewData?.ocr_required
+                          ? "No extractable text (OCR required)."
+                          : "No extracted text returned for this document."}
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      <div className="card" style={{ marginTop: "1.75rem", marginBottom: 0 }}>
-        <h3 style={{ fontSize: "1.05rem", marginTop: 0 }}>Ask Your Notes (RAG)</h3>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+      <Card title="Ask your notes (RAG)">
+        <p className="sw-pdf-rag-hint">
           Answers are grounded in indexed PDF chunks with page citations. Without GEMINI_API_KEY,
           the API returns a clearly labelled retrieval-only excerpt.
         </p>
 
         <form onSubmit={handleAskRag}>
-          <div className="form-group" style={{ marginBottom: "0.85rem" }}>
-            <label htmlFor="rag-doc">Document scope</label>
-            <select
-              id="rag-doc"
-              value={ragDocumentId}
-              onChange={(e) => setRagDocumentId(e.target.value)}
-            >
-              <option value="">All indexed documents for this email</option>
-              {documents.map((doc) => (
-                <option key={doc.document_id} value={doc.document_id}>
-                  {doc.filename} ({doc.rag_status || "not_indexed"})
-                </option>
-              ))}
-            </select>
-          </div>
+          <Select
+            id="rag-doc"
+            label="Document scope"
+            value={ragDocumentId}
+            onChange={(e) => setRagDocumentId(e.target.value)}
+          >
+            <option value="">All indexed documents for this email</option>
+            {documents.map((doc) => (
+              <option key={doc.document_id} value={doc.document_id}>
+                {doc.filename} ({doc.rag_status || "not_indexed"})
+              </option>
+            ))}
+          </Select>
 
-          <div className="form-group" style={{ marginBottom: "0.85rem" }}>
-            <label htmlFor="rag-question">Question</label>
-            <textarea
-              id="rag-question"
-              rows={3}
-              value={ragQuestion}
-              onChange={(e) => setRagQuestion(e.target.value)}
-              placeholder="e.g. What does my notes say about gradient descent?"
-              disabled={ragAsking}
+          <Textarea
+            id="rag-question"
+            label="Question"
+            rows={3}
+            value={ragQuestion}
+            onChange={(e) => setRagQuestion(e.target.value)}
+            placeholder="e.g. What does my notes say about gradient descent?"
+            disabled={ragAsking}
+          />
+
+          {ragError ? (
+            <ErrorMessage
+              message={ragError}
+              onRetry={!ragAsking && ragQuestion.trim() ? () => handleAskRag({ preventDefault() {} }) : undefined}
+              retryLabel="Retry question"
             />
-          </div>
+          ) : null}
 
-          {ragError && <div className="alert alert-danger">{ragError}</div>}
-
-          <button type="submit" className="btn btn-primary" disabled={ragAsking || !ragQuestion.trim()}>
-            {ragAsking ? "Searching notes..." : "Ask Notes Tutor"}
-          </button>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={ragAsking}
+            disabled={ragAsking || !ragQuestion.trim()}
+          >
+            {ragAsking ? "Searching notes..." : "Ask notes tutor"}
+          </Button>
         </form>
 
-        {ragAnswer && (
-          <div style={{ marginTop: "1.25rem" }}>
-            <div className="alert alert-info" style={{ marginBottom: "0.85rem" }}>
+        {ragAnswer ? (
+          <div>
+            <div className="sw-pdf-rag-meta">
               Mode: <strong>{ragAnswer.mode}</strong>
               {ragAnswer.provider ? <> · Provider: {ragAnswer.provider}</> : null}
               {ragAnswer.model_used ? <> · Model: {ragAnswer.model_used}</> : null}
-              <> · Retrieved: {ragAnswer.retrieved_count}</>
+              {ragAnswer.retrieved_count != null ? (
+                <> · Retrieved: {ragAnswer.retrieved_count}</>
+              ) : null}
             </div>
-            <div className="chat-bubble chat-bubble-ai" style={{ maxWidth: "100%" }}>
-              <div className="chat-role-label">Notes Tutor</div>
-              <div style={{ whiteSpace: "pre-wrap" }}>{ragAnswer.answer}</div>
+            <div className="sw-pdf-answer" role="region" aria-label="Notes tutor answer">
+              {ragAnswer.answer}
             </div>
 
             {ragAnswer.sources?.length > 0 ? (
-              <div style={{ marginTop: "1rem" }}>
-                <h4 style={{ fontSize: "0.95rem", marginBottom: "0.5rem" }}>Sources</h4>
-                <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>
-                  {ragAnswer.sources.map((src, idx) => (
-                    <li key={`${src.chunk_id}-${idx}`} style={{ marginBottom: "0.55rem" }}>
-                      <strong>{src.filename}</strong> · Page {src.page} · score {src.similarity_score}
-                      <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                        {src.snippet}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              <ul className="sw-pdf-sources">
+                {ragAnswer.sources.map((src, idx) => (
+                  <li key={`${src.chunk_id}-${idx}`} className="sw-pdf-source">
+                    <strong>{src.filename}</strong>
+                    {src.page != null ? <> · Page {src.page}</> : null}
+                    {src.similarity_score != null ? <> · score {src.similarity_score}</> : null}
+                    {src.snippet ? (
+                      <div className="sw-pdf-source-snippet">{src.snippet}</div>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <p style={{ color: "var(--text-muted)", marginTop: "0.85rem" }}>
+              <p className="sw-pdf-doc-meta" style={{ marginTop: "1rem" }}>
                 No source passages were returned for this question.
               </p>
             )}
           </div>
-        )}
-      </div>
+        ) : null}
+      </Card>
+
+      <Modal
+        open={Boolean(deleteTarget)}
+        title="Delete document?"
+        onClose={() => setDeleteTarget(null)}
+        footer={
+          <>
+            <Button type="button" variant="secondary" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="danger" onClick={confirmDelete}>
+              Delete permanently
+            </Button>
+          </>
+        }
+      >
+        <p>
+          This will permanently delete{" "}
+          <strong>{deleteTarget?.filename || "this document"}</strong> and its RAG index for your
+          account. This cannot be undone.
+        </p>
+      </Modal>
     </div>
   );
 }

@@ -14,6 +14,11 @@ import "./styles/tokens.css";
 import "./styles.css";
 import "./styles/shell.css";
 import "./styles/ui.css";
+import "./styles/dashboard.css";
+import "./styles/planner.css";
+import "./styles/progress.css";
+import "./styles/tutor.css";
+import "./styles/documents.css";
 
 /** Temporary DEV-only gallery — remove route in Phase 7. */
 const UiPreview = import.meta.env.DEV
