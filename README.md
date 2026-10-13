@@ -1,6 +1,6 @@
 # StudyWise AI: An AI-Integrated Personalized and Adaptive Study Planning System
 
-A full-stack, data-driven web application designed to help students optimize their academic performance through **machine learning-based score prediction**, **transparent academic risk assessment**, **deterministic study timetable scheduling**, **modular AI tutoring with grounded RAG over uploaded notes**, and **adaptive progress tracking**.
+A full-stack, data-driven web application designed to help students optimize their academic performance through **machine learning-based score prediction**, **transparent academic risk assessment**, **deterministic study timetable scheduling**, **Learning Hub study tools with grounded RAG over uploaded notes**, and **adaptive progress tracking**.
 
 ---
 
@@ -38,7 +38,7 @@ StudyWise AI is built with strict architectural boundaries separating ML computa
 - **ML vs. Scheduler vs. AI**:
   - **ML Model**: Evaluates tabular academic & lifestyle features to predict expected exam scores.
   - **Scheduler**: A deterministic engine that allocates study blocks (50m study / 10m break) based on subject difficulty, score deficits, and exam urgency.
-  - **RAG / AI Tutor**: Ingests student-uploaded PDF/text notes, chunks passages, retrieves relevant context using vector similarity, and synthesizes answers strictly grounded in the student's material with exact page citations.
+  - **RAG / Learning Hub generation**: Ingests student-uploaded PDF/text notes, chunks passages, retrieves relevant context using vector similarity, and synthesizes answers strictly grounded in the student's material with exact page citations. Hub tools (flashcards, summaries, etc.) share the same Gemini study-generation API.
 
 ---
 
@@ -83,7 +83,7 @@ This prevents data leakage from final exam outcomes while delivering clear, acti
 
 ---
 
-## 5. Grounded AI Tutor & Notes RAG (M14–M16)
+## 5. Notes RAG & Learning Hub generation (M14–M16)
 
 1. **Document Ingestion (M15)**: `POST /documents/upload` accepts PDF notes (size limit via `PDF_UPLOAD_MAX_BYTES`). Text is extracted with `pypdf` and owned by student email.
 2. **Indexing (M16)**: `POST /documents/{id}/index?email=...` chunks pages (default 150 words, 30-word overlap), builds a local TF-IDF index, and persists it under `RAG_STORAGE_DIR` (`storage/rag/`). Re-index is skipped when the content hash is unchanged.

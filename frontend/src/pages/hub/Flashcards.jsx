@@ -11,9 +11,10 @@ import {
   Textarea,
 } from "../../components/ui";
 import {
-  askTutor,
   fetchTutorStatus,
   formatApiError,
+  generateHubContent,
+  modeBadgeLabel,
   parseJsonFromAnswer,
 } from "../../utils/hubAi";
 
@@ -54,7 +55,7 @@ function Flashcards() {
       })
       .catch(() => {
         if (!cancelled) {
-          setStatus({ configured: false, message: "Could not reach tutor status." });
+          setStatus({ configured: false, message: "Could not reach generation status." });
         }
       });
     return () => {
@@ -71,38 +72,54 @@ function Flashcards() {
     setFlipped(false);
     setMeta(null);
 
-    if (!topic.trim()) {
-      setError("Enter a topic for flashcards.");
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError("Enter your student email so local flashcards can use your uploaded documents.");
       return;
     }
-
-    const trimmedEmail = email.trim();
-    if (trimmedEmail) {
-      localStorage.setItem("student_email", trimmedEmail);
-      window.dispatchEvent(new Event("studyai-identity-changed"));
-    }
+    localStorage.setItem("student_email", trimmedEmail);
+    window.dispatchEvent(new Event("studyai-identity-changed"));
 
     const n = Math.min(20, Math.max(3, Number(count) || 8));
     setLoading(true);
     try {
-      const question = [
-        `Create ${n} study flashcards for: ${topic.trim()}.`,
+      const geminiPrompt = [
+        `Create ${n} study flashcards for: ${topic.trim() || "general study revision"}.`,
         "Return ONLY valid JSON (no markdown prose outside JSON) in this shape:",
         '{"cards":[{"front":"...","back":"..."}]}',
         "Front should be a short prompt; back should be a precise answer suitable for active recall.",
       ].join("\n");
-      const data = await askTutor({
-        question,
-        email: trimmedEmail || undefined,
-        subject: topic.trim(),
+      const data = await generateHubContent({
+        tool: "flashcards",
+        email: trimmedEmail,
+        topic: topic.trim() || undefined,
+        count: n,
+        geminiConfigured: Boolean(status?.configured),
+        geminiPrompt: topic.trim() ? geminiPrompt : undefined,
       });
+
+      if (data.mode === "local" && Array.isArray(data.cards)) {
+        setCards(data.cards);
+        setMeta({
+          provider: data.provider,
+          label: modeBadgeLabel(data.label || data.mode),
+          disclaimer: data.disclaimer,
+        });
+        setRawAnswer("");
+        return;
+      }
+
       setRawAnswer(data.answer || "");
-      setMeta({ provider: data.provider, model_used: data.model_used });
+      setMeta({
+        provider: data.provider,
+        model_used: data.model_used,
+        label: modeBadgeLabel(data.label || data.mode),
+      });
       const parsed = parseJsonFromAnswer(data.answer);
       const normalized = normalizeCards(parsed);
       if (!normalized) {
         setError(
-          "The tutor responded, but flashcards JSON could not be parsed. The raw answer is shown below."
+          "Gemini responded, but flashcards JSON could not be parsed. The raw answer is shown below."
         );
         return;
       }
@@ -122,31 +139,39 @@ function Flashcards() {
         <p className="sw-hub-eyebrow">Revise</p>
         <h2>Flashcards</h2>
         <p>
-          Generate active-recall cards from the AI Tutor for a topic you choose. Cards appear only
-          when the API returns parseable JSON — nothing is faked locally.
+          Generate active-recall cards from your uploaded document text (local extractive mode).
+          If Gemini is configured and a topic is provided, topic-only Gemini generation is used as a
+          fallback. Nothing is invented client-side.
         </p>
         <div className="sw-hub-tool-links">
           <Link to="/hub" className="sw-btn sw-btn--ghost sw-btn--sm">
             ← Learning Hub
           </Link>
-          <Link to="/tutor" className="sw-btn sw-btn--secondary sw-btn--sm">
-            AI Tutor
+          <Link to="/documents" className="sw-btn sw-btn--secondary sw-btn--sm">
+            Documents
           </Link>
         </div>
       </div>
 
-      <Card title="Tutor status">
+      <Card title="Generation status">
         {status == null ? (
           <Skeleton variant="line" />
-        ) : status.configured ? (
-          <p className="sw-hub-tool-status-meta">
-            <Badge variant="success">Ready</Badge> {status.provider}
-            {status.model ? ` · ${status.model}` : ""}
-          </p>
         ) : (
           <p className="sw-hub-tool-status-meta">
-            <Badge variant="danger">Not configured</Badge>{" "}
-            {status.message || "Set GEMINI_API_KEY in backend/.env to generate flashcards."}
+            <Badge variant="success">Local available</Badge> uses your Documents text
+            {status.configured ? (
+              <>
+                {" "}
+                · <Badge variant="info">Gemini-enhanced optional</Badge> {status.provider}
+                {status.model ? ` · ${status.model}` : ""}
+              </>
+            ) : (
+              <>
+                {" "}
+                · <Badge variant="warning">Gemini optional</Badge>{" "}
+                {status.message || "Set GEMINI_API_KEY for topic-only generation."}
+              </>
+            )}
           </p>
         )}
       </Card>
@@ -155,19 +180,21 @@ function Flashcards() {
         <form className="sw-hub-tool-form" onSubmit={handleGenerate}>
           <Input
             id="fc-email"
-            label="Student email (optional)"
+            label="Student email *"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            hint="Required for local document-based flashcards."
+            required
           />
           <Textarea
             id="fc-topic"
-            label="Topic *"
+            label="Topic filter (optional for local)"
             rows={2}
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             placeholder="e.g. Binary search trees"
-            required
+            hint="Filters local extraction; required only when falling back to Gemini topic-only mode."
           />
           <Input
             id="fc-count"
@@ -183,7 +210,7 @@ function Flashcards() {
             type="submit"
             variant="primary"
             loading={loading}
-            disabled={loading || status?.configured === false}
+            disabled={loading || !email.trim()}
           >
             {loading ? "Generating…" : "Generate flashcards"}
           </Button>
@@ -195,7 +222,7 @@ function Flashcards() {
       {!loading && cards.length === 0 && !rawAnswer ? (
         <EmptyState
           title="No flashcards yet"
-          description="Enter a topic and generate a deck when the tutor provider is configured."
+          description="Enter your email (and upload notes) for local flashcards, or configure Gemini for topic-only generation."
         />
       ) : null}
 
@@ -249,7 +276,7 @@ function Flashcards() {
       ) : null}
 
       {rawAnswer && cards.length === 0 ? (
-        <Card title="Raw tutor response">
+        <Card title="Raw generation response">
           <div className="sw-hub-tool-output">{rawAnswer}</div>
         </Card>
       ) : null}

@@ -28,6 +28,31 @@ export async function askTutor({
   return res.data;
 }
 
+/**
+ * Document-grounded local Learning Hub tools (no Gemini required).
+ * tool: summary | flashcards | practice | mindmap | mock_exam
+ */
+export async function generateLocalHubTool({
+  email,
+  tool,
+  topic,
+  count,
+  documentId,
+}) {
+  const res = await API.post(
+    "/ai/hub/local",
+    {
+      email: email.trim(),
+      tool,
+      topic: topic || undefined,
+      count: count || undefined,
+      document_id: documentId || undefined,
+    },
+    { timeout: 30000 }
+  );
+  return res.data;
+}
+
 export async function listDocuments(email) {
   const trimmed = (email || "").trim();
   if (!trimmed) return [];
@@ -47,6 +72,97 @@ export async function askDocumentRag({ email, question, documentId, topK = 4 }) 
     { timeout: 45000 }
   );
   return res.data;
+}
+
+/**
+ * Prefer local extractive tools from documents; optionally fall back to Gemini topic generation.
+ * Never invents client-side content when both paths fail.
+ */
+export async function generateHubContent({
+  tool,
+  email,
+  topic,
+  count,
+  documentId,
+  geminiConfigured,
+  geminiPrompt,
+  preferGemini = false,
+}) {
+  const trimmedEmail = (email || "").trim();
+  const errors = [];
+
+  const tryLocal = async () => {
+    if (!trimmedEmail) {
+      throw new Error("Enter your student email to use local document-based tools.");
+    }
+    return generateLocalHubTool({
+      email: trimmedEmail,
+      tool,
+      topic,
+      count,
+      documentId,
+    });
+  };
+
+  const tryGemini = async () => {
+    if (!geminiConfigured) {
+      throw new Error("Gemini is not configured.");
+    }
+    if (!geminiPrompt || !String(geminiPrompt).trim()) {
+      throw new Error("Missing Gemini prompt.");
+    }
+    const data = await askTutor({
+      question: geminiPrompt,
+      email: trimmedEmail || undefined,
+      subject: topic || undefined,
+    });
+    return {
+      mode: "gemini",
+      provider: data.provider || "gemini",
+      label: "Gemini-enhanced",
+      disclaimer: data.disclaimer,
+      answer: data.answer,
+      model_used: data.model_used,
+      raw: data,
+    };
+  };
+
+  if (preferGemini && geminiConfigured) {
+    try {
+      return await tryGemini();
+    } catch (err) {
+      errors.push(formatApiError(err));
+      try {
+        return await tryLocal();
+      } catch (localErr) {
+        errors.push(formatApiError(localErr));
+        throw new Error(errors.filter(Boolean).join(" | "), { cause: localErr });
+      }
+    }
+  }
+
+  try {
+    return await tryLocal();
+  } catch (localErr) {
+    errors.push(formatApiError(localErr));
+    if (geminiConfigured && geminiPrompt) {
+      try {
+        return await tryGemini();
+      } catch (gemErr) {
+        errors.push(formatApiError(gemErr));
+        throw new Error(
+          errors.filter(Boolean).join(" | ") ||
+            "Could not generate content. Upload documents for local mode or configure GEMINI_API_KEY.",
+          { cause: gemErr }
+        );
+      }
+    }
+    throw new Error(
+      errors.filter(Boolean).join(" | ") ||
+        "Could not generate content. Upload documents for local mode or configure GEMINI_API_KEY.",
+      { cause: localErr }
+    );
+  }
 }
 
 /**
@@ -90,4 +206,12 @@ export function formatApiError(err) {
     return getApiUnreachableMessage();
   }
   return err?.message || "Request failed.";
+}
+
+export function modeBadgeLabel(modeOrLabel) {
+  const value = String(modeOrLabel || "").toLowerCase();
+  if (value.includes("gemini") || value === "llm" || value === "gemini") return "Gemini-enhanced";
+  if (value.includes("local") || value === "retrieval_only") return "Local";
+  if (value.includes("planned")) return "Planned";
+  return modeOrLabel || "Unknown";
 }

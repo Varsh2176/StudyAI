@@ -16,7 +16,7 @@ import {
   subjectColor,
   IconPredict,
   IconPlanner,
-  IconTutor,
+  IconHub,
   IconDocuments,
   IconProgress,
   IconProfile,
@@ -455,11 +455,11 @@ function Dashboard() {
                 </span>
                 <span className="sw-dash-action-tile-label">Study Planner</span>
               </Link>
-              <Link to="/tutor" className="sw-dash-action-tile">
+              <Link to="/hub" className="sw-dash-action-tile">
                 <span className="sw-dash-action-tile-icon">
-                  <IconTutor size={18} />
+                  <IconHub size={18} />
                 </span>
-                <span className="sw-dash-action-tile-label">AI Tutor</span>
+                <span className="sw-dash-action-tile-label">Learning Hub</span>
               </Link>
               <Link to="/documents" className="sw-dash-action-tile">
                 <span className="sw-dash-action-tile-icon">

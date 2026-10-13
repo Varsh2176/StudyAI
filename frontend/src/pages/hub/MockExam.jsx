@@ -12,9 +12,10 @@ import {
   Textarea,
 } from "../../components/ui";
 import {
-  askTutor,
   fetchTutorStatus,
   formatApiError,
+  generateHubContent,
+  modeBadgeLabel,
   parseJsonFromAnswer,
 } from "../../utils/hubAi";
 
@@ -74,7 +75,7 @@ function MockExam() {
       })
       .catch(() => {
         if (!cancelled) {
-          setStatus({ configured: false, message: "Could not reach tutor status." });
+          setStatus({ configured: false, message: "Could not reach generation status." });
         }
       });
     return () => {
@@ -100,38 +101,57 @@ function MockExam() {
     setSubmitted(false);
     setMeta(null);
 
-    if (!topic.trim()) {
-      setError("Enter a subject or topic for the mock exam.");
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError("Enter your student email so the local mock exam can use your uploaded documents.");
       return;
     }
-
-    const trimmedEmail = email.trim();
-    if (trimmedEmail) {
-      localStorage.setItem("student_email", trimmedEmail);
-      window.dispatchEvent(new Event("studyai-identity-changed"));
-    }
+    localStorage.setItem("student_email", trimmedEmail);
+    window.dispatchEvent(new Event("studyai-identity-changed"));
 
     const n = Math.min(12, Math.max(3, Number(count) || 5));
     setLoading(true);
     try {
-      const question = [
-        `Create a short mock exam with ${n} multiple-choice questions on: ${topic.trim()}.`,
+      const geminiPrompt = [
+        `Create a short mock exam with ${n} multiple-choice questions on: ${topic.trim() || "general revision"}.`,
         "Return ONLY valid JSON:",
         '{"questions":[{"question":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"B) ...","explanation":"..."}]}',
         "Each question must include 4 options and one correct answer string matching an option.",
       ].join("\n");
-      const data = await askTutor({
-        question,
-        email: trimmedEmail || undefined,
-        subject: topic.trim(),
+      const data = await generateHubContent({
+        tool: "mock_exam",
+        email: trimmedEmail,
+        topic: topic.trim() || undefined,
+        count: n,
+        geminiConfigured: Boolean(status?.configured),
+        geminiPrompt: topic.trim() ? geminiPrompt : undefined,
       });
+      if (data.mode === "local" && Array.isArray(data.questions)) {
+        const normalized = normalizeExam({ questions: data.questions });
+        if (!normalized) {
+          setError("Local mock exam did not produce enough multiple-choice questions.");
+          return;
+        }
+        setQuestions(normalized);
+        setMeta({
+          provider: data.provider,
+          label: modeBadgeLabel(data.label || data.mode),
+          disclaimer: data.disclaimer,
+        });
+        setRawAnswer("");
+        return;
+      }
       setRawAnswer(data.answer || "");
-      setMeta({ provider: data.provider, model_used: data.model_used });
+      setMeta({
+        provider: data.provider,
+        model_used: data.model_used,
+        label: modeBadgeLabel(data.label || data.mode),
+      });
       const parsed = parseJsonFromAnswer(data.answer);
       const normalized = normalizeExam(parsed);
       if (!normalized) {
         setError(
-          "The tutor responded, but mock-exam JSON could not be parsed (need ≥3 MCQs). The raw answer is shown below."
+          "Gemini responded, but mock-exam JSON could not be parsed (need ≥3 MCQs). The raw answer is shown below."
         );
         return;
       }
@@ -160,31 +180,36 @@ function MockExam() {
         <p className="sw-hub-eyebrow">Practice</p>
         <h2>Mock Exams</h2>
         <p>
-          Generate a short multiple-choice set from the AI Tutor, attempt it here, and score your
-          selections. Scores are computed only from your answers against the model’s returned keys.
+          Build a short multiple-choice set from terms found in your uploaded notes (local extractive).
+          Gemini is optional for topic-only exams. Scores use only the returned answer key.
         </p>
         <div className="sw-hub-tool-links">
           <Link to="/hub" className="sw-btn sw-btn--ghost sw-btn--sm">
             ← Learning Hub
           </Link>
-          <Link to="/planner" className="sw-btn sw-btn--secondary sw-btn--sm">
-            Study Planner
+          <Link to="/documents" className="sw-btn sw-btn--secondary sw-btn--sm">
+            Documents
           </Link>
         </div>
       </div>
 
-      <Card title="Tutor status">
+      <Card title="Generation status">
         {status == null ? (
           <Skeleton variant="line" />
-        ) : status.configured ? (
-          <p className="sw-hub-tool-status-meta">
-            <Badge variant="success">Ready</Badge> {status.provider}
-            {status.model ? ` · ${status.model}` : ""}
-          </p>
         ) : (
           <p className="sw-hub-tool-status-meta">
-            <Badge variant="danger">Not configured</Badge>{" "}
-            {status.message || "Set GEMINI_API_KEY to generate mock exams."}
+            <Badge variant="success">Local available</Badge> uses your Documents text
+            {status.configured ? (
+              <>
+                {" "}
+                · <Badge variant="info">Gemini-enhanced optional</Badge>
+              </>
+            ) : (
+              <>
+                {" "}
+                · <Badge variant="warning">Gemini optional</Badge>
+              </>
+            )}
           </p>
         )}
       </Card>
@@ -193,19 +218,21 @@ function MockExam() {
         <form className="sw-hub-tool-form" onSubmit={handleGenerate}>
           <Input
             id="exam-email"
-            label="Student email (optional)"
+            label="Student email *"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            hint="Required for local document-based mock exams."
+            required
           />
           <Textarea
             id="exam-topic"
-            label="Exam topic *"
+            label="Topic filter (optional for local)"
             rows={2}
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             placeholder="e.g. Midterm review — Machine Learning fundamentals"
-            required
+            hint="Filters local extraction; required only for Gemini topic-only fallback."
           />
           <Input
             id="exam-count"
@@ -221,7 +248,7 @@ function MockExam() {
             type="submit"
             variant="primary"
             loading={loading}
-            disabled={loading || status?.configured === false}
+            disabled={loading || !email.trim()}
           >
             {loading ? "Generating…" : "Generate mock exam"}
           </Button>
@@ -233,7 +260,7 @@ function MockExam() {
       {!loading && questions.length === 0 && !rawAnswer ? (
         <EmptyState
           title="No exam yet"
-          description="Enter a topic and generate when the tutor provider is configured."
+          description="Enter your email and upload notes for a local mock exam, or configure Gemini for topic-only generation."
         />
       ) : null}
 
@@ -323,7 +350,7 @@ function MockExam() {
       ) : null}
 
       {rawAnswer && questions.length === 0 ? (
-        <Card title="Raw tutor response">
+        <Card title="Raw generation response">
           <div className="sw-hub-tool-output">{rawAnswer}</div>
         </Card>
       ) : null}

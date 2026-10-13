@@ -31,8 +31,8 @@ function Documents() {
           <a href="#ask-notes" className="sw-btn sw-btn--primary sw-btn--sm">
             Ask about notes
           </a>
-          <Link to="/tutor" className="sw-btn sw-btn--secondary sw-btn--sm">
-            Open AI Tutor
+          <Link to="/hub" className="sw-btn sw-btn--secondary sw-btn--sm">
+            Learning Hub
           </Link>
         </div>
       </div>

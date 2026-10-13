@@ -16,7 +16,9 @@ import {
   askTutor,
   fetchTutorStatus,
   formatApiError,
+  generateLocalHubTool,
   listDocuments,
+  modeBadgeLabel,
 } from "../../utils/hubAi";
 
 function SummaryNotes() {
@@ -41,7 +43,7 @@ function SummaryNotes() {
         if (!cancelled) {
           setStatus({
             configured: false,
-            message: "Could not reach /ai/tutor/status. Is the backend running?",
+            message: "Could not reach the study generation status endpoint. Is the backend running?",
           });
         }
       });
@@ -119,9 +121,60 @@ function SummaryNotes() {
           model_used: data.model_used,
           sources: data.sources || [],
         });
+      } else if (trimmedEmail) {
+        // Prefer local extractive summary from owned documents; Gemini only if requested path fails.
+        try {
+          const local = await generateLocalHubTool({
+            email: trimmedEmail,
+            tool: "summary",
+            topic: topic.trim() || undefined,
+            count: 8,
+            documentId: documentId || undefined,
+          });
+          setResult({
+            kind: "local",
+            text: local.summary,
+            provider: local.provider,
+            label: modeBadgeLabel(local.label || local.mode),
+            disclaimer: local.disclaimer,
+            sources: local.sources || [],
+          });
+        } catch (localErr) {
+          if (!status?.configured) {
+            throw localErr;
+          }
+          if (!topic.trim()) {
+            throw localErr;
+          }
+          const question = [
+            "Write concise study summary notes for a college student.",
+            `Topic: ${topic.trim()}`,
+            "Use short sections with bullet points for: Overview, Key concepts, Common mistakes, Quick revision checklist.",
+            "Do not invent citations or claim you read a specific PDF.",
+          ].join("\n");
+          const data = await askTutor({
+            question,
+            email: trimmedEmail || undefined,
+            subject: topic.trim(),
+          });
+          setResult({
+            kind: "gemini",
+            text: data.answer,
+            provider: data.provider,
+            model_used: data.model_used,
+            label: "Gemini-enhanced",
+            disclaimer: data.disclaimer,
+          });
+        }
       } else {
         if (!topic.trim()) {
-          setError("Enter a topic to summarize.");
+          setError("Enter a topic (Gemini) or your email for local document summaries.");
+          return;
+        }
+        if (!status?.configured) {
+          setError(
+            "Enter your student email to summarize uploaded notes locally, or configure GEMINI_API_KEY for topic-only summaries."
+          );
           return;
         }
         const question = [
@@ -132,14 +185,15 @@ function SummaryNotes() {
         ].join("\n");
         const data = await askTutor({
           question,
-          email: trimmedEmail || undefined,
+          email: undefined,
           subject: topic.trim(),
         });
         setResult({
-          kind: "tutor",
+          kind: "gemini",
           text: data.answer,
           provider: data.provider,
           model_used: data.model_used,
+          label: "Gemini-enhanced",
           disclaimer: data.disclaimer,
         });
       }
@@ -156,8 +210,8 @@ function SummaryNotes() {
         <p className="sw-hub-eyebrow">Learn</p>
         <h2>Summary Notes</h2>
         <p>
-          Generate study summaries from a topic via the AI Tutor, or from your indexed PDFs via
-          Documents RAG. Results come from the live API — nothing is invented client-side.
+          Local extractive summaries use your uploaded document text (no Gemini required). Indexed-notes
+          RAG stays available; Gemini is an optional topic-only fallback when configured.
         </p>
         <div className="sw-hub-tool-links">
           <Link to="/hub" className="sw-btn sw-btn--ghost sw-btn--sm">
@@ -174,13 +228,17 @@ function SummaryNotes() {
           <Skeleton variant="line" />
         ) : status.configured ? (
           <p className="sw-hub-tool-status-meta">
-            <Badge variant="success">Tutor ready</Badge> {status.provider}
+            <Badge variant="success">Local available</Badge> document extractive summaries
+            {" "}
+            · <Badge variant="info">Gemini-enhanced optional</Badge> {status.provider}
             {status.model ? ` · ${status.model}` : ""}
           </p>
         ) : (
           <p className="sw-hub-tool-status-meta">
-            <Badge variant="warning">Tutor may be unavailable</Badge>{" "}
-            {status.message || "Set GEMINI_API_KEY for topic summaries."} Notes RAG can still return
+            <Badge variant="success">Local available</Badge> use your uploaded documents
+            {" "}
+            · <Badge variant="warning">Gemini optional</Badge>{" "}
+            {status.message || "Set GEMINI_API_KEY for topic-only summaries."} Notes RAG can still return
             retrieval-only excerpts when documents are indexed.
           </p>
         )}
@@ -195,7 +253,7 @@ function SummaryNotes() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="student@example.edu"
-            hint="Required for notes-based summaries; optional profile context for topic mode."
+            hint="Required for local document summaries and notes RAG."
           />
           <Select
             id="summary-source"
@@ -203,7 +261,7 @@ function SummaryNotes() {
             value={sourceMode}
             onChange={(e) => setSourceMode(e.target.value)}
           >
-            <option value="topic">Topic (AI Tutor)</option>
+            <option value="topic">Documents (local extractive; Gemini fallback)</option>
             <option value="notes">Indexed notes (Documents RAG)</option>
           </Select>
           {sourceMode === "notes" ? (
@@ -230,7 +288,7 @@ function SummaryNotes() {
           ) : null}
           <Textarea
             id="summary-topic"
-            label={sourceMode === "notes" ? "Focus (optional)" : "Topic *"}
+            label={sourceMode === "notes" ? "Focus (optional)" : "Topic filter (optional for local)"}
             rows={3}
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
@@ -239,10 +297,20 @@ function SummaryNotes() {
                 ? "e.g. gradient descent and learning rate"
                 : "e.g. Operating system process scheduling"
             }
-            required={sourceMode === "topic"}
+            required={false}
+            hint={
+              sourceMode === "topic"
+                ? "Optional filter for local summaries; required only for Gemini topic-only fallback."
+                : undefined
+            }
           />
           {error ? <ErrorMessage message={error} /> : null}
-          <Button type="submit" variant="primary" loading={loading} disabled={loading}>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={loading}
+            disabled={loading || (sourceMode === "topic" && !email.trim() && !status?.configured)}
+          >
             {loading ? "Generating…" : "Generate summary"}
           </Button>
         </form>
@@ -265,7 +333,20 @@ function SummaryNotes() {
       {result ? (
         <Card title="Summary result">
           <div className="sw-hub-tool-meta">
-            Source: <strong>{result.kind === "rag" ? "Documents RAG" : "AI Tutor"}</strong>
+            Source:{" "}
+            <strong>
+              {result.kind === "rag"
+                ? "Documents RAG"
+                : result.kind === "local"
+                  ? "Local extractive"
+                  : "Gemini-enhanced"}
+            </strong>
+            {result.label ? (
+              <>
+                {" "}
+                · <Badge variant="info">{result.label}</Badge>
+              </>
+            ) : null}
             {result.mode ? <> · Mode: {result.mode}</> : null}
             {result.provider ? <> · {result.provider}</> : null}
             {result.model_used ? <> · {result.model_used}</> : null}

@@ -11,9 +11,10 @@ import {
   Textarea,
 } from "../../components/ui";
 import {
-  askTutor,
   fetchTutorStatus,
   formatApiError,
+  generateHubContent,
+  modeBadgeLabel,
   parseJsonFromAnswer,
 } from "../../utils/hubAi";
 
@@ -73,7 +74,7 @@ function MindMapTool() {
       })
       .catch(() => {
         if (!cancelled) {
-          setStatus({ configured: false, message: "Could not reach tutor status." });
+          setStatus({ configured: false, message: "Could not reach generation status." });
         }
       });
     return () => {
@@ -88,37 +89,55 @@ function MindMapTool() {
     setRawAnswer("");
     setMeta(null);
 
-    if (!topic.trim()) {
-      setError("Enter a central topic for the mind map.");
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError("Enter your student email so the local outline can use your uploaded documents.");
       return;
     }
-
-    const trimmedEmail = email.trim();
-    if (trimmedEmail) {
-      localStorage.setItem("student_email", trimmedEmail);
-      window.dispatchEvent(new Event("studyai-identity-changed"));
-    }
+    localStorage.setItem("student_email", trimmedEmail);
+    window.dispatchEvent(new Event("studyai-identity-changed"));
 
     setLoading(true);
     try {
-      const question = [
-        `Build a hierarchical mind map for the academic topic: ${topic.trim()}.`,
+      const geminiPrompt = [
+        `Build a hierarchical mind map for the academic topic: ${topic.trim() || "study outline"}.`,
         "Return ONLY valid JSON:",
         '{"topic":"...","children":[{"label":"...","children":[{"label":"...","children":[]}]}]}',
         "Use 3–6 top branches and keep depth reasonable for revision.",
       ].join("\n");
-      const data = await askTutor({
-        question,
-        email: trimmedEmail || undefined,
-        subject: topic.trim(),
+      const data = await generateHubContent({
+        tool: "mindmap",
+        email: trimmedEmail,
+        topic: topic.trim() || undefined,
+        geminiConfigured: Boolean(status?.configured),
+        geminiPrompt: topic.trim() ? geminiPrompt : undefined,
       });
+      if (data.mode === "local" && data.tree) {
+        const normalized = normalizeTree(data.tree);
+        if (!normalized) {
+          setError("Local outline was returned but could not be rendered.");
+          return;
+        }
+        setTree(normalized);
+        setMeta({
+          provider: data.provider,
+          label: modeBadgeLabel(data.label || data.mode),
+          disclaimer: data.disclaimer || data.note,
+        });
+        setRawAnswer("");
+        return;
+      }
       setRawAnswer(data.answer || "");
-      setMeta({ provider: data.provider, model_used: data.model_used });
+      setMeta({
+        provider: data.provider,
+        model_used: data.model_used,
+        label: modeBadgeLabel(data.label || data.mode),
+      });
       const parsed = parseJsonFromAnswer(data.answer);
       const normalized = normalizeTree(parsed);
       if (!normalized) {
         setError(
-          "The tutor responded, but mind-map JSON could not be parsed. The raw answer is shown below."
+          "Gemini responded, but mind-map JSON could not be parsed. The raw answer is shown below."
         );
         return;
       }
@@ -136,31 +155,36 @@ function MindMapTool() {
         <p className="sw-hub-eyebrow">Revise</p>
         <h2>Mind Maps</h2>
         <p>
-          Ask the AI Tutor for a concept hierarchy, then render it as an outline map. No static
-          fake maps are shown if generation fails.
+          Build a rule-based outline from document headings/sentences (local extractive — not semantic
+          AI). Gemini is optional for topic-only generation when a topic is provided.
         </p>
         <div className="sw-hub-tool-links">
           <Link to="/hub" className="sw-btn sw-btn--ghost sw-btn--sm">
             ← Learning Hub
           </Link>
-          <Link to="/tutor" className="sw-btn sw-btn--secondary sw-btn--sm">
-            AI Tutor
+          <Link to="/documents" className="sw-btn sw-btn--secondary sw-btn--sm">
+            Documents
           </Link>
         </div>
       </div>
 
-      <Card title="Tutor status">
+      <Card title="Generation status">
         {status == null ? (
           <Skeleton variant="line" />
-        ) : status.configured ? (
-          <p className="sw-hub-tool-status-meta">
-            <Badge variant="success">Ready</Badge> {status.provider}
-            {status.model ? ` · ${status.model}` : ""}
-          </p>
         ) : (
           <p className="sw-hub-tool-status-meta">
-            <Badge variant="danger">Not configured</Badge>{" "}
-            {status.message || "Set GEMINI_API_KEY to generate mind maps."}
+            <Badge variant="success">Local available</Badge> heading/sentence outline
+            {status.configured ? (
+              <>
+                {" "}
+                · <Badge variant="info">Gemini-enhanced optional</Badge>
+              </>
+            ) : (
+              <>
+                {" "}
+                · <Badge variant="warning">Gemini optional</Badge>
+              </>
+            )}
           </p>
         )}
       </Card>
@@ -169,26 +193,28 @@ function MindMapTool() {
         <form className="sw-hub-tool-form" onSubmit={handleGenerate}>
           <Input
             id="mm-email"
-            label="Student email (optional)"
+            label="Student email *"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            hint="Required for local document-based outlines."
+            required
           />
           <Textarea
             id="mm-topic"
-            label="Central topic *"
+            label="Central topic (optional for local)"
             rows={2}
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             placeholder="e.g. TCP/IP networking stack"
-            required
+            hint="Used as outline root / filter; required only for Gemini topic-only fallback."
           />
           {error ? <ErrorMessage message={error} /> : null}
           <Button
             type="submit"
             variant="primary"
             loading={loading}
-            disabled={loading || status?.configured === false}
+            disabled={loading || !email.trim()}
           >
             {loading ? "Generating…" : "Generate mind map"}
           </Button>
@@ -200,7 +226,7 @@ function MindMapTool() {
       {!loading && !tree && !rawAnswer ? (
         <EmptyState
           title="No mind map yet"
-          description="Enter a topic and generate when the tutor provider is configured."
+          description="Enter your email (and upload notes) for a local outline, or configure Gemini for topic-only maps."
         />
       ) : null}
 
@@ -224,7 +250,7 @@ function MindMapTool() {
       ) : null}
 
       {rawAnswer && !tree ? (
-        <Card title="Raw tutor response">
+        <Card title="Raw generation response">
           <div className="sw-hub-tool-output">{rawAnswer}</div>
         </Card>
       ) : null}

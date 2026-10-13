@@ -9,13 +9,13 @@ import {
   IconProgress,
   IconQuiz,
   IconSummary,
-  IconTutor,
 } from "../components/ui";
 
 /**
  * AI Learning Hub — discovery surface.
- * Tools that need Gemini use the existing /ai/tutor API.
- * Summary Notes can also use Documents RAG for indexed PDFs.
+ * Local tools use uploaded document text via POST /ai/hub/local (no Gemini required).
+ * Gemini remains an optional enhancement for topic-only generation.
+ * Ask Your Notes uses Documents RAG (retrieval-only without Gemini).
  */
 
 const GROUPS = [
@@ -25,23 +25,25 @@ const GROUPS = [
     description: "Understand topics with assistance grounded in StudyWise workflows.",
     tools: [
       {
-        id: "tutor",
-        title: "AI Tutor",
+        id: "ask-notes",
+        title: "Ask Your Notes",
         description:
-          "Ask academic questions and get student-friendly explanations from the configured tutor API.",
-        status: "available",
-        statusLabel: "Available",
-        Icon: IconTutor,
-        actionTo: "/tutor",
-        actionLabel: "Open AI Tutor",
+          "Ask grounded questions about your uploaded PDFs with page citations (local TF-IDF/RAG; Gemini optional for synthesis).",
+        status: "local",
+        statusLabel: "Local",
+        Icon: IconDocuments,
+        actionTo: "/documents#ask-notes",
+        actionLabel: "Open Documents",
+        secondaryTo: "/documents",
+        secondaryLabel: "Upload PDFs",
       },
       {
         id: "summary",
         title: "Summary Notes",
         description:
-          "Generate concise study summaries from a topic (AI Tutor) or from your indexed PDFs (Documents RAG).",
-        status: "available",
-        statusLabel: "Available",
+          "Extractive bullet summaries from your documents (local). Indexed-notes RAG and Gemini topic mode are optional enhancements.",
+        status: "local",
+        statusLabel: "Local",
         Icon: IconSummary,
         actionTo: "/hub/summary",
         actionLabel: "Open Summary Notes",
@@ -53,15 +55,15 @@ const GROUPS = [
   {
     id: "revise",
     title: "Revise",
-    description: "Active recall and concept organization powered by the AI Tutor.",
+    description: "Active recall and outlines from your notes; Gemini optional.",
     tools: [
       {
         id: "flashcards",
         title: "Flashcards",
         description:
-          "Generate flip cards for a topic. Cards appear only when the tutor returns parseable JSON.",
-        status: "available",
-        statusLabel: "Available",
+          "Extractive flashcards from definitions and sentences in your PDFs. Gemini is optional for topic-only decks.",
+        status: "local",
+        statusLabel: "Local",
         Icon: IconFlashcards,
         actionTo: "/hub/flashcards",
         actionLabel: "Open Flashcards",
@@ -70,9 +72,9 @@ const GROUPS = [
         id: "mindmaps",
         title: "Mind Maps",
         description:
-          "Build a hierarchical concept outline from the tutor and view it as a mind-map style tree.",
-        status: "available",
-        statusLabel: "Available",
+          "Rule-based outline from document headings/sentences — not semantic AI. Gemini optional for topic-only maps.",
+        status: "local",
+        statusLabel: "Local",
         Icon: IconMindMap,
         actionTo: "/hub/mindmap",
         actionLabel: "Open Mind Maps",
@@ -82,15 +84,15 @@ const GROUPS = [
   {
     id: "practice",
     title: "Practice",
-    description: "Topic drills and short mock assessments generated through the tutor API.",
+    description: "Drills and short exams grounded in your uploaded text.",
     tools: [
       {
         id: "practice-questions",
         title: "Practice Questions",
         description:
-          "Generate topic questions with revealable answers. Requires a configured Gemini key.",
-        status: "available",
-        statusLabel: "Available",
+          "Fill-in-the-blank drills from your document sentences. Gemini optional for topic-only sets.",
+        status: "local",
+        statusLabel: "Local",
         Icon: IconQuiz,
         actionTo: "/hub/practice",
         actionLabel: "Open Practice Questions",
@@ -99,9 +101,9 @@ const GROUPS = [
         id: "mock-exams",
         title: "Mock Exams",
         description:
-          "Generate a short multiple-choice set, attempt it, and score against the model answer key.",
-        status: "available",
-        statusLabel: "Available",
+          "Multiple-choice items using terms found in your notes as answers/distractors. Gemini optional.",
+        status: "local",
+        statusLabel: "Local",
         Icon: IconExam,
         actionTo: "/hub/mock-exam",
         actionLabel: "Open Mock Exams",
@@ -118,8 +120,8 @@ const GROUPS = [
         title: "Progress",
         description:
           "Load planned versus actual study time, subject completion rates, and recent sessions from the performance API.",
-        status: "available",
-        statusLabel: "Available",
+        status: "local",
+        statusLabel: "Local",
         Icon: IconProgress,
         actionTo: "/progress",
         actionLabel: "Open Progress Tracking",
@@ -129,9 +131,10 @@ const GROUPS = [
 ];
 
 function statusBadgeVariant(status) {
-  if (status === "available") return "success";
-  if (status === "partial") return "info";
-  return "warning";
+  if (status === "local" || status === "available") return "success";
+  if (status === "gemini" || status === "partial") return "info";
+  if (status === "planned") return "warning";
+  return "danger";
 }
 
 function LearningHub() {
@@ -144,9 +147,9 @@ function LearningHub() {
           <p className="sw-hub-eyebrow">Unified workspace</p>
           <h2 id="hub-heading">AI Learning Hub</h2>
           <p>
-            Open each tool below to generate real study content through the existing AI Tutor or
-            Documents RAG APIs. If Gemini is not configured, tools show that status instead of fake
-            output.
+            Hub tools work from your uploaded documents without a Gemini key. Gemini remains an
+            optional enhancement for topic-only generation when configured. Tools never invent
+            content client-side.
           </p>
         </section>
         <div className="sw-hub-hero-aside">
@@ -170,10 +173,10 @@ function LearningHub() {
       </div>
 
       <div className="sw-hub-legend" role="note">
-        <Badge variant="success">Available</Badge>
-        <span>opens a working tool page</span>
-        <Badge variant="info">Needs API key</Badge>
-        <span>tutor-backed tools require GEMINI_API_KEY</span>
+        <Badge variant="success">Local</Badge>
+        <span>works from your uploaded notes without GEMINI_API_KEY</span>
+        <Badge variant="info">Gemini-enhanced</Badge>
+        <span>optional when a key is configured</span>
       </div>
 
       {GROUPS.map((group) => (

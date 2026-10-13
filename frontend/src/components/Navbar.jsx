@@ -7,7 +7,6 @@ import {
   IconPredict,
   IconProfile,
   IconProgress,
-  IconTutor,
 } from "./ui/Icons";
 
 /**
@@ -20,7 +19,6 @@ const APP_LINKS = [
   { to: "/hub", label: "Learning Hub", Icon: IconHub },
   { to: "/predict", label: "Predict", Icon: IconPredict },
   { to: "/planner", label: "Planner", Icon: IconPlanner },
-  { to: "/tutor", label: "AI Tutor", Icon: IconTutor },
   { to: "/documents", label: "Documents", Icon: IconDocuments },
   { to: "/progress", label: "Progress", Icon: IconProgress },
   { to: "/profile", label: "Profile", Icon: IconProfile },

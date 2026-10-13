@@ -1038,6 +1038,7 @@ class TestGeneralAITutorM14(unittest.TestCase):
                 status = get_tutor_status()
                 self.assertFalse(status["configured"])
                 self.assertIn("GEMINI_API_KEY", status["message"])
+                self.assertIn("Study generation", status["message"])
                 with self.assertRaises(TutorNotConfiguredError):
                     answer_academic_question("What is polymorphism?")
 
@@ -1087,7 +1088,7 @@ class TestGeneralAITutorM14(unittest.TestCase):
     def test_not_configured_maps_to_503(self):
         with patch(
             "app.routes.ai.answer_academic_question",
-            side_effect=TutorNotConfiguredError("AI Tutor is not configured."),
+            side_effect=TutorNotConfiguredError("Study generation is not configured."),
         ):
             req = TutorChatRequest(question="Explain queues.")
             with self.assertRaises(HTTPException) as ctx:
@@ -1102,7 +1103,7 @@ class TestGeneralAITutorM14(unittest.TestCase):
                 "provider": None,
                 "model": None,
                 "timeout_seconds": 20,
-                "message": "AI Tutor is not configured. Set GEMINI_API_KEY in backend/.env",
+                "message": "Study generation is not configured. Set GEMINI_API_KEY in backend/.env",
             },
         ):
             status = tutor_status_endpoint()
@@ -1206,6 +1207,154 @@ class TestGeneralAITutorM14(unittest.TestCase):
                 auth_user(),
             )
             self.assertEqual(res["answer"], "OK")
+
+
+class TestLocalStudyToolsHub(unittest.TestCase):
+    """Local extractive Learning Hub tools (no Gemini required)."""
+
+    def _pages(self):
+        return [
+            {
+                "document_id": "doc-1",
+                "filename": "networks.pdf",
+                "page": 1,
+                "text": (
+                    "The physical layer is responsible for bit transmission over a medium. "
+                    "TCP is a reliable transport protocol that provides ordered delivery. "
+                    "Congestion control: reduces sending rate when packet loss is detected. "
+                    "Routing decides the path packets take across interconnected networks. "
+                    "Latency measures the time required for a packet to travel end to end. "
+                    "Bandwidth is the capacity of a communication channel measured in bits per second."
+                ),
+            },
+            {
+                "document_id": "doc-1",
+                "filename": "networks.pdf",
+                "page": 2,
+                "text": (
+                    "Physical Layer\n"
+                    "Transport Layer\n"
+                    "A socket is an endpoint for sending or receiving data across a network. "
+                    "Flow control prevents a fast sender from overwhelming a slower receiver."
+                ),
+            },
+        ]
+
+    def test_local_summary_is_labelled_and_extractive(self):
+        from app.services.local_study_tools_service import build_local_summary
+
+        result = build_local_summary(self._pages(), topic="physical")
+        self.assertEqual(result["mode"], "local")
+        self.assertEqual(result["provider"], "local_extractive")
+        self.assertIn("not a gemini", result["disclaimer"].lower())
+        self.assertIn("physical layer", result["summary"].lower())
+        self.assertNotIn("invent", result["summary"].lower())
+
+    def test_local_flashcards_from_definitions(self):
+        from app.services.local_study_tools_service import build_local_flashcards
+
+        result = build_local_flashcards(self._pages(), count=5)
+        self.assertGreaterEqual(len(result["cards"]), 3)
+        self.assertTrue(all(c["front"] and c["back"] for c in result["cards"]))
+        joined = " ".join(f"{c['front']} {c['back']}".lower() for c in result["cards"])
+        self.assertTrue(
+            "tcp" in joined or "physical" in joined or "bandwidth" in joined or "socket" in joined
+        )
+
+    def test_local_practice_and_mock_exam(self):
+        from app.services.local_study_tools_service import (
+            build_local_mock_exam,
+            build_local_practice,
+        )
+
+        practice = build_local_practice(self._pages(), count=4)
+        self.assertGreaterEqual(len(practice["questions"]), 3)
+        for q in practice["questions"]:
+            self.assertIn("______", q["question"])
+            self.assertTrue(q["answer"])
+
+        exam = build_local_mock_exam(self._pages(), count=3)
+        self.assertGreaterEqual(len(exam["questions"]), 3)
+        for q in exam["questions"]:
+            self.assertGreaterEqual(len(q["options"]), 2)
+            self.assertIn(q["answer"], q["options"])
+
+    def test_local_mindmap_uses_headings(self):
+        from app.services.local_study_tools_service import build_local_mindmap
+
+        result = build_local_mindmap(self._pages(), topic="Networking")
+        self.assertEqual(result["tree"]["topic"], "Networking")
+        labels = [c["label"] for c in result["tree"]["children"]]
+        self.assertTrue(any("Physical Layer" in label or "Transport Layer" in label for label in labels))
+        self.assertIn("not semantic ai", result["note"].lower())
+
+    def test_local_empty_pages_fails_clearly(self):
+        from app.services.local_study_tools_service import (
+            LocalStudyToolsError,
+            generate_local_tool,
+        )
+
+        with self.assertRaises(LocalStudyToolsError) as ctx:
+            generate_local_tool("flashcards", [])
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_local_hub_endpoint_ownership_and_no_gemini(self):
+        from app.routes import ai as ai_routes
+
+        fake_docs = [
+            {
+                "document_id": "d1",
+                "email": "alice@example.edu",
+                "filename": "notes.pdf",
+                "text_available": True,
+                "pages": [{"page_number": 1, "text": "Polymorphism is the ability to present the same interface for different types. Encapsulation hides internal state behind methods."}],
+            }
+        ]
+
+        class _Docs:
+            def find_one(self, query, projection=None):
+                return None
+
+            def find(self, query, projection=None):
+                class _C(list):
+                    def limit(self, n):
+                        return self
+
+                email = (query or {}).get("email")
+                rows = [d for d in fake_docs if d.get("email") == email]
+                return _C(rows)
+
+        with patch.object(ai_routes, "documents_collection", _Docs()):
+            req = ai_routes.LocalHubToolRequest(
+                email="alice@example.edu",
+                tool="flashcards",
+                count=4,
+            )
+            res = ai_routes.local_hub_tools_endpoint(req, auth_user("alice@example.edu"))
+            self.assertEqual(res["mode"], "local")
+            self.assertEqual(res["provider"], "local_extractive")
+            self.assertGreaterEqual(len(res["cards"]), 1)
+
+            with self.assertRaises(HTTPException) as denied:
+                ai_routes.local_hub_tools_endpoint(req, auth_user("bob@example.edu"))
+            self.assertEqual(denied.exception.status_code, 403)
+
+    def test_tutor_status_advertises_local_tools(self):
+        from app.routes.ai import tutor_status_endpoint
+
+        with patch(
+            "app.routes.ai.get_tutor_status",
+            return_value={
+                "configured": False,
+                "provider": None,
+                "model": None,
+                "timeout_seconds": 40,
+                "message": "Study generation is not configured.",
+            },
+        ):
+            status = tutor_status_endpoint()
+            self.assertTrue(status["local_tools_available"])
+            self.assertIn("flashcards", status["local_tools"])
 
 
 class TestPdfDocumentsM15(unittest.TestCase):
@@ -2363,6 +2512,136 @@ class TestSecurityHardeningM11(unittest.TestCase):
                 generate_plan_endpoint(req, auth_user("alice@example.edu"))
             self.assertEqual(ctx.exception.status_code, 503)
             self.assertIn("Could not save study plan", ctx.exception.detail)
+
+
+class TestLocalStudyTools(unittest.TestCase):
+    """Local extractive Learning Hub tools — no Gemini required."""
+
+    SAMPLE_PAGES = [
+        {
+            "document_id": "doc1",
+            "filename": "networks.pdf",
+            "page": 1,
+            "text": (
+                "Physical Layer is the lowest layer of the OSI model and moves raw bits over a medium. "
+                "Data Link Layer means framing and error detection on a single link. "
+                "Network Layer: routing packets between networks across hops. "
+                "Introduction to Networking\n"
+                "Transport Concepts\n"
+                "TCP provides reliable ordered delivery for applications that need it."
+            ),
+        },
+        {
+            "document_id": "doc1",
+            "filename": "networks.pdf",
+            "page": 2,
+            "text": (
+                "UDP is a connectionless transport protocol used for low-latency applications. "
+                "Congestion control reduces sending rate when the network is overloaded."
+            ),
+        },
+    ]
+
+    def test_local_summary_labelled_and_extractive(self):
+        from app.services.local_study_tools_service import build_local_summary
+
+        result = build_local_summary(self.SAMPLE_PAGES, topic="physical layer", max_bullets=5)
+        self.assertEqual(result["mode"], "local")
+        self.assertEqual(result["provider"], "local_extractive")
+        self.assertIn("not a gemini", result["disclaimer"].lower())
+        self.assertIn("Physical Layer", result["summary"])
+        self.assertNotIn("fabricat", result["summary"].lower())
+
+    def test_local_flashcards_from_definitions(self):
+        from app.services.local_study_tools_service import build_local_flashcards
+
+        result = build_local_flashcards(self.SAMPLE_PAGES, count=5)
+        self.assertEqual(result["mode"], "local")
+        self.assertGreaterEqual(len(result["cards"]), 3)
+        fronts = " ".join(c["front"] for c in result["cards"])
+        backs = " ".join(c["back"] for c in result["cards"])
+        self.assertTrue("Physical" in fronts or "raw bits" in backs)
+
+    def test_local_practice_and_mock_exam(self):
+        from app.services.local_study_tools_service import (
+            build_local_mock_exam,
+            build_local_practice,
+        )
+
+        practice = build_local_practice(self.SAMPLE_PAGES, count=3)
+        self.assertEqual(practice["mode"], "local")
+        self.assertGreaterEqual(len(practice["questions"]), 3)
+        for q in practice["questions"]:
+            self.assertIn("______", q["question"])
+            self.assertTrue(q["answer"])
+
+        exam = build_local_mock_exam(self.SAMPLE_PAGES, count=3)
+        self.assertEqual(exam["mode"], "local")
+        self.assertGreaterEqual(len(exam["questions"]), 3)
+        for q in exam["questions"]:
+            self.assertGreaterEqual(len(q["options"]), 2)
+            self.assertIn(q["answer"], q["options"])
+
+    def test_local_mindmap_rule_based_not_semantic_ai_claim(self):
+        from app.services.local_study_tools_service import build_local_mindmap
+
+        result = build_local_mindmap(self.SAMPLE_PAGES, topic="Networking")
+        self.assertEqual(result["mode"], "local")
+        self.assertEqual(result["tree"]["topic"], "Networking")
+        self.assertGreaterEqual(len(result["tree"]["children"]), 1)
+        self.assertIn("not semantic ai", result["note"].lower())
+
+    def test_empty_pages_raise_clear_error(self):
+        from app.services.local_study_tools_service import (
+            LocalStudyToolsError,
+            generate_local_tool,
+        )
+
+        with self.assertRaises(LocalStudyToolsError) as ctx:
+            generate_local_tool("flashcards", [])
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_hub_local_route_registered_and_ownership(self):
+        from app.routes.ai import LocalHubToolRequest, local_hub_tools_endpoint
+
+        paths = list(app.openapi()["paths"].keys())
+        self.assertIn("/ai/hub/local", paths)
+
+        with patch("app.routes.ai.documents_collection") as coll:
+            coll.find_one.return_value = {
+                "document_id": "doc-a",
+                "email": "alice@example.edu",
+                "filename": "a.pdf",
+                "pages": self.SAMPLE_PAGES,
+                "text_available": True,
+            }
+            # Spoofing another student's email must 403 before DB work matters.
+            with self.assertRaises(HTTPException) as denied:
+                local_hub_tools_endpoint(
+                    LocalHubToolRequest(
+                        email="alice@example.edu",
+                        tool="summary",
+                    ),
+                    auth_user("bob@example.edu"),
+                )
+            self.assertEqual(denied.exception.status_code, 403)
+
+            result = local_hub_tools_endpoint(
+                LocalHubToolRequest(
+                    email="alice@example.edu",
+                    tool="flashcards",
+                    count=5,
+                    document_id="doc-a",
+                ),
+                auth_user("alice@example.edu"),
+            )
+            self.assertEqual(result["mode"], "local")
+            self.assertGreaterEqual(len(result["cards"]), 3)
+
+    def test_tutor_status_advertises_local_tools(self):
+        status = tutor_status_endpoint()
+        self.assertTrue(status.get("local_tools_available"))
+        self.assertIn("flashcards", status.get("local_tools") or [])
 
 
 if __name__ == "__main__":

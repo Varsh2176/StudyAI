@@ -1,12 +1,13 @@
 """
-M14 — General academic AI Tutor service.
+Shared Gemini study-generation service (Learning Hub + optional RAG synthesis).
 
 Provider-independent interface with a Gemini REST implementation.
-This module is intentionally separate from RAG/notes grounding (M15–M16).
-It never fabricates uploaded-note citations.
+Used by POST /ai/tutor for hub tools (flashcards, summaries, practice, etc.)
+and by Documents RAG when LLM-grounded answers are enabled.
+It never fabricates uploaded-note citations for non-RAG callers.
 
-M11/tutor hardening: configurable timeouts and bounded retries for transient
-provider failures (timeouts / 5xx). Does not retry auth or quota errors.
+Configurable timeouts and bounded retries for transient provider failures
+(timeouts / 5xx). Does not retry auth or quota errors.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ DEFAULT_MAX_RETRIES = 1  # total attempts = 1 + retries
 MAX_HISTORY_MESSAGES = 20
 _RETRYABLE_HTTP_STATUS = frozenset({500, 502, 503, 504})
 DISCLAIMER = (
-    "StudyWise AI Tutor provides educational explanations for learning support. "
+    "StudyWise study generation provides educational explanations for learning support. "
     "Verify critical facts with your course materials and instructors. "
     "This response is not grounded in uploaded study notes."
 )
@@ -95,10 +96,10 @@ def get_tutor_status() -> Dict[str, Any]:
         "timeout_seconds": get_tutor_timeout_seconds(),
         "max_retries": get_tutor_max_retries(),
         "message": (
-            "AI Tutor is ready."
+            "Study generation is ready."
             if configured
             else (
-                "AI Tutor is not configured. Set GEMINI_API_KEY in backend/.env "
+                "Study generation is not configured. Set GEMINI_API_KEY in backend/.env "
                 "and restart the API server."
             )
         ),
@@ -110,7 +111,7 @@ def _build_system_instruction(
     profile_context: Optional[Dict[str, Any]],
 ) -> str:
     parts = [
-        "You are StudyWise AI Tutor, a helpful academic study assistant for college students.",
+        "You are StudyWise, a helpful academic study assistant for college students.",
         "Explain concepts clearly in student-friendly language with short examples when useful.",
         "Be accurate and humble: if you are unsure, say so and suggest how the student can verify.",
         "Do not invent citations, page numbers, uploaded notes, or claim answers came from student documents.",
@@ -285,7 +286,7 @@ def answer_academic_question(
     api_key = get_tutor_api_key()
     if not api_key:
         raise TutorNotConfiguredError(
-            "AI Tutor is not configured. Set GEMINI_API_KEY in backend/.env and restart the server."
+            "Study generation is not configured. Set GEMINI_API_KEY in backend/.env and restart the server."
         )
 
     model = get_tutor_model()

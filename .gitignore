@@ -19,3 +19,8 @@ models/*.joblib
 # M15/M16 local PDF + RAG index storage (never commit student uploads/indexes)
 backend/storage/
 storage/
+
+# Local verification artifacts (may include test emails / run metadata)
+backend/scripts/*_results.json
+backend/scripts/m12_no_gemini_results.json
+backend/scripts/m13_e2e_results.json

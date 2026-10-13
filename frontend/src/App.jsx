@@ -9,7 +9,6 @@ import Login from "./pages/Login";
 import StudentProfile from "./pages/StudentProfile";
 import PredictScore from "./pages/PredictScore";
 import StudyPlanner from "./pages/StudyPlanner";
-import AiTutor from "./pages/AiTutor";
 import Dashboard from "./pages/Dashboard";
 import ProgressTracking from "./pages/ProgressTracking";
 import Documents from "./pages/Documents";
@@ -26,7 +25,6 @@ import "./styles/ui.css";
 import "./styles/dashboard.css";
 import "./styles/planner.css";
 import "./styles/progress.css";
-import "./styles/tutor.css";
 import "./styles/documents.css";
 import "./styles/forms.css";
 import "./styles/hub.css";
@@ -57,7 +55,8 @@ function App() {
               <Route path="/hub/mock-exam" element={<MockExam />} />
               <Route path="/predict" element={<PredictScore />} />
               <Route path="/planner" element={<StudyPlanner />} />
-              <Route path="/tutor" element={<AiTutor />} />
+              {/* Legacy /tutor chat page removed — Learning Hub tools use POST /ai/tutor. */}
+              <Route path="/tutor" element={<Navigate to="/hub" replace />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/progress" element={<ProgressTracking />} />
               <Route path="/profile" element={<StudentProfile />} />

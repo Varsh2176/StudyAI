@@ -1,14 +1,20 @@
 import uuid
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
-from app.database.mongodb import notes_collection, students_collection
+from app.database.mongodb import documents_collection, notes_collection, students_collection
 from app.deps.auth import get_current_user, require_owned_email
 from app.models.schemas import AskTutorRequest, TutorChatRequest, TutorChatResponse
 from app.services.ai_service import generate_tutor_response
 from app.services.auth_service import AuthenticatedUser
+from app.services.local_study_tools_service import (
+    LocalStudyToolsError,
+    collect_pages_from_records,
+    generate_local_tool,
+)
 from app.services.rag_service import (
     chunk_document,
     extract_text_from_pdf,
@@ -23,7 +29,7 @@ from app.services.tutor_service import (
     get_tutor_status,
 )
 
-router = APIRouter(prefix="/ai", tags=["AI Tutor & Notes RAG"])
+router = APIRouter(prefix="/ai", tags=["Study Generation & Notes RAG"])
 
 # Process-local cache only — not durable storage.
 _notes_cache = {}
@@ -152,10 +158,94 @@ def get_student_notes(
     return {"notes": notes_list, "email": owner}
 
 
+class LocalHubToolRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+    tool: str = Field(..., min_length=3, max_length=40)
+    document_id: Optional[str] = Field(default=None, max_length=120)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    count: Optional[int] = Field(default=None, ge=3, le=20)
+
+
+def _load_owned_document_records(owner: str, document_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    if documents_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document storage is unavailable because MongoDB is not connected. "
+                "Check /health/database."
+            ),
+        )
+    try:
+        if document_id:
+            record = documents_collection.find_one(
+                {"document_id": document_id, "email": owner},
+                {"_id": 0},
+            )
+            if not record:
+                # Do not leak whether another student's document exists.
+                raise HTTPException(status_code=404, detail="Document not found.")
+            return [record]
+        rows = list(
+            documents_collection.find(
+                {"email": owner},
+                {"_id": 0},
+            ).limit(40)
+        )
+        # Prefer records with extractable page text (field may be missing on older uploads).
+        with_text = [
+            r
+            for r in rows
+            if r.get("text_available")
+            or (r.get("pages") and any((p.get("text") or "").strip() for p in r.get("pages") or []))
+        ]
+        return with_text or rows
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not load documents ({type(exc).__name__}). Check /health/database.",
+        ) from exc
+
+
 @router.get("/tutor/status")
 def tutor_status_endpoint():
-    """Reports whether the M14 general AI Tutor provider is configured."""
-    return get_tutor_status()
+    """Reports Gemini configuration plus local Learning Hub capability."""
+    status = get_tutor_status()
+    status["local_tools_available"] = True
+    status["local_tools"] = ["summary", "flashcards", "practice", "mindmap", "mock_exam"]
+    status["local_note"] = (
+        "Local extractive tools work from your uploaded document text without GEMINI_API_KEY. "
+        "Gemini remains optional for topic-only generation."
+    )
+    return status
+
+
+@router.post("/hub/local")
+def local_hub_tools_endpoint(
+    request: LocalHubToolRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Document-grounded Learning Hub tools that do not require Gemini.
+    Output is always labelled local/extractive.
+    """
+    owner = require_owned_email(request.email, current_user)
+    records = _load_owned_document_records(owner, request.document_id)
+    pages = collect_pages_from_records(records)
+    try:
+        result = generate_local_tool(
+            request.tool,
+            pages,
+            topic=request.topic,
+            count=request.count,
+        )
+    except LocalStudyToolsError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    result["email"] = owner
+    result["document_count"] = len(records)
+    result["gemini_optional"] = True
+    return result
 
 
 @router.post("/tutor", response_model=TutorChatResponse)
@@ -164,9 +254,9 @@ def general_tutor_endpoint(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """
-    M14 general academic AI Tutor.
-    Answers student questions with a configured LLM provider.
-    Does not use uploaded notes or fabricate note citations (M15–M16).
+    Shared study-generation endpoint for Learning Hub tools.
+    Answers with a configured LLM provider (used by flashcards, summaries, etc.).
+    Does not use uploaded notes or fabricate note citations (use Documents RAG for that).
     Profile context is loaded only for the authenticated student.
     """
     question = (request.question or "").strip()
@@ -215,7 +305,7 @@ def general_tutor_endpoint(
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail="AI Tutor failed unexpectedly. Please try again later.",
+            detail="Study generation failed unexpectedly. Please try again later.",
         ) from exc
 
 

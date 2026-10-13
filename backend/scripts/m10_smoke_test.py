@@ -411,7 +411,7 @@ def main():
     )
     record(
         "S5",
-        "Gemini AI Tutor",
+        "Gemini study generation",
         code == 200 and len(str(data.get("answer") or "")) > 10,
         f"http={code} provider={data.get('provider')} model={data.get('model_used')}",
     )
