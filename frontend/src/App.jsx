@@ -1,8 +1,11 @@
 import { lazy, Suspense } from "react";
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 import AuthLayout from "./components/AuthLayout";
 import AppShell from "./components/AppShell";
+import { AuthProvider } from "./auth/AuthProvider.jsx";
+import ProtectedRoute from "./auth/ProtectedRoute";
 import Register from "./pages/Register";
+import Login from "./pages/Login";
 import StudentProfile from "./pages/StudentProfile";
 import PredictScore from "./pages/PredictScore";
 import StudyPlanner from "./pages/StudyPlanner";
@@ -10,6 +13,12 @@ import AiTutor from "./pages/AiTutor";
 import Dashboard from "./pages/Dashboard";
 import ProgressTracking from "./pages/ProgressTracking";
 import Documents from "./pages/Documents";
+import LearningHub from "./pages/LearningHub";
+import SummaryNotes from "./pages/hub/SummaryNotes";
+import Flashcards from "./pages/hub/Flashcards";
+import MindMapTool from "./pages/hub/MindMapTool";
+import PracticeQuestions from "./pages/hub/PracticeQuestions";
+import MockExam from "./pages/hub/MockExam";
 import "./styles/tokens.css";
 import "./styles.css";
 import "./styles/shell.css";
@@ -20,6 +29,7 @@ import "./styles/progress.css";
 import "./styles/tutor.css";
 import "./styles/documents.css";
 import "./styles/forms.css";
+import "./styles/hub.css";
 
 /** Temporary DEV-only gallery — remove route in Phase 7. */
 const UiPreview = import.meta.env.DEV
@@ -28,33 +38,46 @@ const UiPreview = import.meta.env.DEV
 
 function App() {
   return (
-    <Router>
-      <Routes>
-        <Route element={<AuthLayout />}>
-          <Route path="/" element={<Register />} />
-        </Route>
+    <AuthProvider>
+      <Router>
+        <Routes>
+          <Route element={<AuthLayout />}>
+            <Route path="/" element={<Register />} />
+            <Route path="/login" element={<Login />} />
+          </Route>
 
-        <Route element={<AppShell />}>
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/predict" element={<PredictScore />} />
-          <Route path="/planner" element={<StudyPlanner />} />
-          <Route path="/tutor" element={<AiTutor />} />
-          <Route path="/documents" element={<Documents />} />
-          <Route path="/progress" element={<ProgressTracking />} />
-          <Route path="/profile" element={<StudentProfile />} />
-          {UiPreview ? (
-            <Route
-              path="/__ui"
-              element={
-                <Suspense fallback={<p style={{ padding: "1rem" }}>Loading UI preview…</p>}>
-                  <UiPreview />
-                </Suspense>
-              }
-            />
-          ) : null}
-        </Route>
-      </Routes>
-    </Router>
+          <Route element={<ProtectedRoute />}>
+            <Route element={<AppShell />}>
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/hub" element={<LearningHub />} />
+              <Route path="/hub/summary" element={<SummaryNotes />} />
+              <Route path="/hub/flashcards" element={<Flashcards />} />
+              <Route path="/hub/mindmap" element={<MindMapTool />} />
+              <Route path="/hub/practice" element={<PracticeQuestions />} />
+              <Route path="/hub/mock-exam" element={<MockExam />} />
+              <Route path="/predict" element={<PredictScore />} />
+              <Route path="/planner" element={<StudyPlanner />} />
+              <Route path="/tutor" element={<AiTutor />} />
+              <Route path="/documents" element={<Documents />} />
+              <Route path="/progress" element={<ProgressTracking />} />
+              <Route path="/profile" element={<StudentProfile />} />
+              {UiPreview ? (
+                <Route
+                  path="/__ui"
+                  element={
+                    <Suspense fallback={<p style={{ padding: "1rem" }}>Loading UI preview…</p>}>
+                      <UiPreview />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+            </Route>
+          </Route>
+
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </Router>
+    </AuthProvider>
   );
 }
 

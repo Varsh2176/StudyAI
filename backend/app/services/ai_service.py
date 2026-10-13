@@ -37,9 +37,15 @@ def generate_tutor_response(
 
     if gemini_api_key:
         try:
-            # Call Google Gemini API (gemini-2.5-flash / gemini-1.5-flash)
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
-            
+            # Reuse shared tutor model so Notes RAG and Tutor stay on the same supported ID.
+            from app.services.tutor_service import get_tutor_model
+
+            model = get_tutor_model()
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent?key={gemini_api_key}"
+            )
+
             prompt = (
                 "You are StudyWise AI Tutor, a personalized academic assistant.\n"
                 "Answer the student's question based STRICTLY and ONLY on the provided study notes passages below.\n"

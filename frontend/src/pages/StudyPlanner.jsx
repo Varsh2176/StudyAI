@@ -236,15 +236,29 @@ function StudyPlanner() {
       : null;
   const subjectCountDisplay = plan?.subjects_weighted?.length ?? null;
 
+  const weeklySlots = plan?.weekly_schedule
+    ? Object.values(plan.weekly_schedule).flatMap((slots) => slots || [])
+    : [];
+  const slotsWithCompletion = weeklySlots.filter((s) => typeof s?.completed === "boolean");
+  const completedSlots = slotsWithCompletion.filter((s) => s.completed).length;
+  const planProgressAvailable = slotsWithCompletion.length > 0;
+  const planProgressPercent = planProgressAvailable
+    ? Math.round((completedSlots / slotsWithCompletion.length) * 100)
+    : null;
+
   return (
     <div className="sw-planner page-container">
-      <section className="sw-planner-intro" aria-labelledby="planner-heading">
-        <h2 id="planner-heading">Personalized study planner</h2>
-        <p>
-          Deterministic scheduling from subject difficulty, score gaps, and exam urgency,
-          with Pomodoro-style blocks (50m study / 10m break). Generate a plan or adapt from logged progress.
-        </p>
-      </section>
+      <div className="sw-planner-hero">
+        <section className="sw-planner-intro" aria-labelledby="planner-heading">
+          <p className="sw-planner-eyebrow">Adaptive schedule</p>
+          <h2 id="planner-heading">Personalized study planner</h2>
+          <p>
+            Deterministic scheduling from subject difficulty, score gaps, and exam urgency,
+            with Pomodoro-style blocks (50m study / 10m break). Generate a plan or adapt from
+            logged progress.
+          </p>
+        </section>
+      </div>
 
       {error ? (
         <ErrorMessage
@@ -271,43 +285,77 @@ function StudyPlanner() {
       ) : null}
 
       {plan ? (
-        <div className="sw-planner-stats">
-          <Card title="Daily study hours">
-            {dailyHoursDisplay !== null ? (
-              <div className="sw-planner-stat-value">{dailyHoursDisplay}</div>
-            ) : (
-              <p className="sw-planner-stat-muted">Not available</p>
-            )}
-          </Card>
-          <Card title="Days planned">
-            {daysPlannedDisplay !== null ? (
-              <div className="sw-planner-stat-value">{daysPlannedDisplay}</div>
-            ) : (
-              <p className="sw-planner-stat-muted">Not available</p>
-            )}
-          </Card>
-          <Card title="Scheduled study">
-            {totalStudyHoursDisplay !== null ? (
-              <div className="sw-planner-stat-value">
-                {totalStudyHoursDisplay}
-                <span className="sw-planner-stat-muted"> hrs</span>
+        <section className="sw-planner-overview" aria-labelledby="planner-overview-heading">
+          <h3 id="planner-overview-heading" className="sw-planner-section-heading">
+            Current plan overview
+          </h3>
+          <div className="sw-planner-stats">
+            <Card title="Daily study hours" className="sw-planner-stat-card">
+              {dailyHoursDisplay !== null ? (
+                <div className="sw-planner-stat-value">{dailyHoursDisplay}</div>
+              ) : (
+                <p className="sw-planner-stat-muted">Not available</p>
+              )}
+            </Card>
+            <Card title="Days planned" className="sw-planner-stat-card">
+              {daysPlannedDisplay !== null ? (
+                <div className="sw-planner-stat-value">{daysPlannedDisplay}</div>
+              ) : (
+                <p className="sw-planner-stat-muted">Not available</p>
+              )}
+            </Card>
+            <Card title="Scheduled study" className="sw-planner-stat-card">
+              {totalStudyHoursDisplay !== null ? (
+                <div className="sw-planner-stat-value">
+                  {totalStudyHoursDisplay}
+                  <span className="sw-planner-stat-muted"> hrs</span>
+                </div>
+              ) : (
+                <p className="sw-planner-stat-muted">Not available</p>
+              )}
+            </Card>
+            <Card title="Subjects weighted" className="sw-planner-stat-card">
+              {subjectCountDisplay !== null ? (
+                <div className="sw-planner-stat-value">{subjectCountDisplay}</div>
+              ) : (
+                <p className="sw-planner-stat-muted">Not available</p>
+              )}
+            </Card>
+          </div>
+
+          {planProgressAvailable && planProgressPercent !== null ? (
+            <Card title="Weekly slot completion" className="sw-planner-progress-card">
+              <div className="sw-planner-progress-meta">
+                <span>
+                  {completedSlots} of {slotsWithCompletion.length} weekly sessions marked complete
+                </span>
+                <strong>{planProgressPercent}%</strong>
               </div>
-            ) : (
-              <p className="sw-planner-stat-muted">Not available</p>
-            )}
-          </Card>
-          <Card title="Subjects weighted">
-            {subjectCountDisplay !== null ? (
-              <div className="sw-planner-stat-value">{subjectCountDisplay}</div>
-            ) : (
-              <p className="sw-planner-stat-muted">Not available</p>
-            )}
-          </Card>
-        </div>
+              <div
+                className="sw-planner-progress-track"
+                role="progressbar"
+                aria-valuenow={planProgressPercent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Weekly slot completion"
+              >
+                <div
+                  className="sw-planner-progress-fill"
+                  style={{ width: `${planProgressPercent}%` }}
+                />
+              </div>
+            </Card>
+          ) : plan?.weekly_schedule ? (
+            <p className="sw-planner-stat-muted sw-planner-progress-hint">
+              Mark weekly timetable sessions complete to track plan progress here.
+            </p>
+          ) : null}
+        </section>
       ) : null}
 
       <Card
         title="Plan parameters & subjects"
+        className="sw-planner-params-card"
         action={
           <div className="sw-planner-actions">
             {email ? (
@@ -323,7 +371,7 @@ function StudyPlanner() {
               disabled={adapting || loading}
               onClick={handleAdaptFromProgress}
             >
-              {adapting ? "Adapting..." : "Adapt from progress"}
+              {adapting ? "Adapting…" : "Adapt from progress"}
             </Button>
           </div>
         }
@@ -479,8 +527,8 @@ function StudyPlanner() {
       ) : null}
 
       {plan ? (
-        <div>
-          <Card title="Subject priority weightings">
+        <div className="sw-planner-results">
+          <Card title="Subject priority weightings" className="sw-planner-weights-card">
             {!plan.subjects_weighted?.length ? (
               <p className="sw-planner-stat-muted">No subject weightings returned for this plan.</p>
             ) : (
@@ -495,6 +543,10 @@ function StudyPlanner() {
                     sw.allocated_ratio !== undefined && sw.allocated_ratio !== null
                       ? Math.round(Number(sw.allocated_ratio) * 100)
                       : null;
+                  const urgentExam =
+                    sw.days_left !== null &&
+                    sw.days_left !== undefined &&
+                    Number(sw.days_left) <= 7;
                   return (
                     <div key={idx} className="sw-planner-weight-card">
                       <div className="sw-planner-weight-head">
@@ -503,6 +555,14 @@ function StudyPlanner() {
                           <Badge variant="info">{share}% time share</Badge>
                         ) : null}
                       </div>
+                      {share !== null && !Number.isNaN(share) ? (
+                        <div className="sw-planner-share-track" aria-hidden="true">
+                          <div
+                            className="sw-planner-share-fill"
+                            style={{ width: `${Math.min(100, share)}%`, background: colors.solid }}
+                          />
+                        </div>
+                      ) : null}
                       <div className="sw-planner-stat-muted">
                         Difficulty: <strong>{sw.difficulty}</strong>
                         {gap !== null && !Number.isNaN(gap) ? (
@@ -517,18 +577,8 @@ function StudyPlanner() {
                           </>
                         ) : null}
                         {sw.days_left !== null && sw.days_left !== undefined ? (
-                          <div>
-                            Exam in:{" "}
-                            <strong
-                              style={{
-                                color:
-                                  Number(sw.days_left) <= 7
-                                    ? "var(--sw-danger)"
-                                    : "var(--sw-text)",
-                              }}
-                            >
-                              {sw.days_left} days
-                            </strong>
+                          <div className={urgentExam ? "sw-planner-exam-urgent" : undefined}>
+                            Exam in: <strong>{sw.days_left} days</strong>
                           </div>
                         ) : null}
                       </div>
@@ -539,8 +589,8 @@ function StudyPlanner() {
             )}
           </Card>
 
-          <Card title="Timetable">
-            <div className="sw-planner-tabs">
+          <Card title="Timetable" className="sw-planner-timetable-card">
+            <div className="sw-planner-tabs" role="tablist" aria-label="Timetable views">
               <Button
                 type="button"
                 variant={activeTab === "daily" ? "primary" : "secondary"}
@@ -561,7 +611,7 @@ function StudyPlanner() {
             </div>
 
             {activeTab === "daily" && (
-              <div>
+              <div className="sw-planner-timetable-panel">
                 <h3 className="sw-planner-subjects-title">
                   Scheduled slots
                   {dailyHoursDisplay !== null ? ` (${dailyHoursDisplay} hours)` : ""}
@@ -572,37 +622,39 @@ function StudyPlanner() {
                     description="This plan did not return a daily_schedule."
                   />
                 ) : (
-                  plan.daily_schedule.map((slot, idx) => {
-                    const colors = subjectColor(slot.subject || "session");
-                    return (
-                      <div key={slot.slot_id || idx} className="sw-planner-slot">
-                        <div
-                          className="sw-planner-slot-accent"
-                          style={{ background: colors.solid }}
-                          aria-hidden="true"
-                        />
-                        <div className="sw-planner-slot-time">
-                          {slot.start_time} – {slot.end_time}
-                        </div>
-                        <div className="sw-planner-slot-body">
-                          <div className="sw-planner-slot-subject" style={{ color: colors.solid }}>
-                            {slot.subject}
+                  <div className="sw-planner-slot-list">
+                    {plan.daily_schedule.map((slot, idx) => {
+                      const colors = subjectColor(slot.subject || "session");
+                      return (
+                        <div key={slot.slot_id || idx} className="sw-planner-slot">
+                          <div
+                            className="sw-planner-slot-accent"
+                            style={{ background: colors.solid }}
+                            aria-hidden="true"
+                          />
+                          <div className="sw-planner-slot-time">
+                            {slot.start_time} – {slot.end_time}
                           </div>
-                          <div className="sw-planner-slot-focus">{slot.recommended_focus}</div>
+                          <div className="sw-planner-slot-body">
+                            <div className="sw-planner-slot-subject" style={{ color: colors.solid }}>
+                              {slot.subject}
+                            </div>
+                            <div className="sw-planner-slot-focus">{slot.recommended_focus}</div>
+                          </div>
+                          {slot.break_time ? (
+                            <span className="sw-planner-stat-muted">Rest: {slot.break_time}</span>
+                          ) : null}
+                          <Badge variant={statusToBadgeVariant("planned")}>planned</Badge>
                         </div>
-                        {slot.break_time ? (
-                          <span className="sw-planner-stat-muted">Rest: {slot.break_time}</span>
-                        ) : null}
-                        <Badge variant={statusToBadgeVariant("planned")}>planned</Badge>
-                      </div>
-                    );
-                  })
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             )}
 
             {activeTab === "weekly" && (
-              <div>
+              <div className="sw-planner-timetable-panel">
                 {!plan.weekly_schedule || Object.keys(plan.weekly_schedule).length === 0 ? (
                   <EmptyState
                     title="No weekly schedule"

@@ -1,18 +1,29 @@
 import { NavLink } from "react-router-dom";
+import {
+  IconDashboard,
+  IconDocuments,
+  IconHub,
+  IconPlanner,
+  IconPredict,
+  IconProfile,
+  IconProgress,
+  IconTutor,
+} from "./ui/Icons";
 
 /**
  * App navigation links.
- * Phase 1: used as the sidebar / drawer nav (variant="sidebar").
+ * Used as the sidebar / drawer nav (variant="sidebar").
  * Register stays on the auth layout, not in this list.
  */
 const APP_LINKS = [
-  { to: "/dashboard", label: "Dashboard" },
-  { to: "/predict", label: "Predict" },
-  { to: "/planner", label: "Planner" },
-  { to: "/tutor", label: "AI Tutor" },
-  { to: "/documents", label: "Documents" },
-  { to: "/progress", label: "Progress" },
-  { to: "/profile", label: "Profile" },
+  { to: "/dashboard", label: "Dashboard", Icon: IconDashboard },
+  { to: "/hub", label: "Learning Hub", Icon: IconHub },
+  { to: "/predict", label: "Predict", Icon: IconPredict },
+  { to: "/planner", label: "Planner", Icon: IconPlanner },
+  { to: "/tutor", label: "AI Tutor", Icon: IconTutor },
+  { to: "/documents", label: "Documents", Icon: IconDocuments },
+  { to: "/progress", label: "Progress", Icon: IconProgress },
+  { to: "/profile", label: "Profile", Icon: IconProfile },
 ];
 
 function Navbar({ variant = "sidebar", onNavigate, navId = "sw-sidebar-nav" }) {
@@ -30,18 +41,26 @@ function Navbar({ variant = "sidebar", onNavigate, navId = "sw-sidebar-nav" }) {
         </NavLink>
       )}
       <div className="nav-links">
-        {APP_LINKS.map((link) => (
-          <NavLink
-            key={link.to}
-            to={link.to}
-            className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
-            onClick={() => {
-              if (typeof onNavigate === "function") onNavigate();
-            }}
-          >
-            {link.label}
-          </NavLink>
-        ))}
+        {APP_LINKS.map((link) => {
+          const Icon = link.Icon;
+          return (
+            <NavLink
+              key={link.to}
+              to={link.to}
+              className={({ isActive }) =>
+                `nav-link ${isActive ? "active" : ""}`
+              }
+              onClick={() => {
+                if (typeof onNavigate === "function") onNavigate();
+              }}
+            >
+              <span className="nav-link-icon" aria-hidden="true">
+                <Icon size={18} />
+              </span>
+              <span className="nav-link-label">{link.label}</span>
+            </NavLink>
+          );
+        })}
       </div>
     </nav>
   );

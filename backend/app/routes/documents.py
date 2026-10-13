@@ -1,16 +1,27 @@
 """
 M15/M16 — Student PDF document upload, text extraction, and RAG indexing/Q&A.
 
-Ownership is tied to student email (same convention as profile/prediction APIs).
+M10: ownership is the authenticated token subject. Client email must match.
 """
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 
 from app.database.mongodb import documents_collection
+from app.deps.auth import get_current_user, require_owned_email
 from app.models.schemas import RagAskRequest, RagAskResponse
+from app.services.auth_service import AuthenticatedUser
+from app.services.document_rag_service import (
+    DocumentRagError,
+    delete_document_index,
+    generate_rag_answer,
+    get_index_status,
+    index_document_record,
+    retrieve_from_document,
+    retrieve_from_owned_documents,
+)
 from app.services.pdf_document_service import (
     PdfDocumentError,
     build_document_record,
@@ -21,26 +32,27 @@ from app.services.pdf_document_service import (
     public_upload_response,
     require_student_email,
 )
-from app.services.document_rag_service import (
-    DocumentRagError,
-    delete_document_index,
-    generate_rag_answer,
-    get_index_status,
-    index_document_record,
-    retrieve_from_document,
-    retrieve_from_owned_documents,
-)
 
 router = APIRouter(prefix="/documents", tags=["Study Documents (M15/M16)"])
 
-# In-memory fallback when MongoDB is unavailable (tests / offline dev)
+# Process-local cache for same-request convenience only — never treated as durable storage.
 _documents_cache: Dict[str, Dict[str, Any]] = {}
 
 
-def _persist_record(record: Dict[str, Any]) -> None:
-    _documents_cache[record["document_id"]] = record
+def _require_documents_collection():
     if documents_collection is None:
-        return
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document storage is unavailable because MongoDB is not connected. "
+                "In-memory document persistence is disabled. Check /health/database."
+            ),
+        )
+
+
+def _persist_record(record: Dict[str, Any]) -> None:
+    _require_documents_collection()
+    _documents_cache[record["document_id"]] = record
     try:
         documents_collection.update_one(
             {"document_id": record["document_id"]},
@@ -48,7 +60,13 @@ def _persist_record(record: Dict[str, Any]) -> None:
             upsert=True,
         )
     except Exception as db_err:
-        print(f"Non-fatal error persisting document metadata: {type(db_err).__name__}")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not persist document metadata because MongoDB is unreachable. "
+                f"({type(db_err).__name__}). Check /health/database."
+            ),
+        ) from db_err
 
 
 def _find_record(document_id: str) -> Optional[Dict[str, Any]]:
@@ -135,15 +153,19 @@ def document_upload_limits():
 
 
 @router.post("/rag/ask", response_model=RagAskResponse)
-def ask_documents_rag(request: RagAskRequest = Body(...)):
+def ask_documents_rag(
+    request: RagAskRequest = Body(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     M16: Ask a question over one owned document or all indexed owned documents.
     Answers are grounded in retrieved chunks; citations include filename + page.
     """
     try:
-        owner = require_student_email(request.email)
+        requested = require_student_email(request.email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
 
     top_k = request.top_k
     document_scope = "single_document" if request.document_id else "all_owned_indexed"
@@ -204,15 +226,18 @@ async def upload_pdf_document(
     file: UploadFile = File(...),
     email: str = Form(...),
     subject: str = Form("General"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """
-    Upload a PDF study document for the given student email.
+    Upload a PDF study document for the authenticated student.
     Validates signature/size, stores bytes on disk, extracts text for M16.
     """
     try:
-        owner = require_student_email(email)
+        requested = require_student_email(email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
+    _require_documents_collection()
 
     filename = file.filename or ""
     if filename and not filename.lower().endswith(".pdf"):
@@ -261,12 +286,16 @@ async def upload_pdf_document(
 
 
 @router.get("")
-def list_documents(email: str = Query(..., description="Student email that owns the documents")):
-    """List metadata for documents owned by the student."""
+def list_documents(
+    email: str = Query(..., description="Must match the authenticated student"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """List metadata for documents owned by the authenticated student."""
     try:
-        owner = require_student_email(email)
+        requested = require_student_email(email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
 
     records = _list_records_for_email(owner)
     documents = []
@@ -292,13 +321,15 @@ def list_documents(email: str = Query(..., description="Student email that owns 
 @router.get("/{document_id}")
 def get_document_metadata(
     document_id: str,
-    email: str = Query(..., description="Student email that owns the document"),
+    email: str = Query(..., description="Must match the authenticated student"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Retrieve processing status and metadata for one owned document."""
     try:
-        owner = require_student_email(email)
+        requested = require_student_email(email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
 
     record = _require_owned_record(document_id, owner)
     return public_document_summary(record)
@@ -307,16 +338,18 @@ def get_document_metadata(
 @router.get("/{document_id}/text")
 def get_document_extracted_text(
     document_id: str,
-    email: str = Query(..., description="Student email that owns the document"),
+    email: str = Query(..., description="Must match the authenticated student"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """
     Return extracted page text for M16 retrieval pipelines.
     Requires ownership. Does not return filesystem paths.
     """
     try:
-        owner = require_student_email(email)
+        requested = require_student_email(email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
 
     record = _require_owned_record(document_id, owner)
     # Prefer full record with pages from cache/Mongo
@@ -332,14 +365,16 @@ def get_document_extracted_text(
 @router.post("/{document_id}/index")
 def index_document_for_rag(
     document_id: str,
-    email: str = Query(..., description="Student email that owns the document"),
+    email: str = Query(..., description="Must match the authenticated student"),
     force: bool = Query(False, description="Rebuild index even if content hash matches"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """M16: Chunk + embed an owned document into the persistent local RAG index."""
     try:
-        owner = require_student_email(email)
+        requested = require_student_email(email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
 
     record = _require_owned_record(document_id, owner)
     full = _find_record(document_id) or record
@@ -360,13 +395,15 @@ def index_document_for_rag(
 @router.get("/{document_id}/index-status")
 def document_rag_index_status(
     document_id: str,
-    email: str = Query(..., description="Student email that owns the document"),
+    email: str = Query(..., description="Must match the authenticated student"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """M16: Return RAG indexing status for an owned document."""
     try:
-        owner = require_student_email(email)
+        requested = require_student_email(email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
 
     _require_owned_record(document_id, owner)
     return get_index_status(owner, document_id)
@@ -375,13 +412,15 @@ def document_rag_index_status(
 @router.delete("/{document_id}")
 def delete_document(
     document_id: str,
-    email: str = Query(..., description="Student email that owns the document"),
+    email: str = Query(..., description="Must match the authenticated student"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Delete an owned document's stored PDF, sidecar, RAG index, and metadata."""
     try:
-        owner = require_student_email(email)
+        requested = require_student_email(email)
     except PdfDocumentError as exc:
         raise _http_from_pdf_error(exc) from exc
+    owner = require_owned_email(requested, current_user)
 
     record = _require_owned_record(document_id, owner)
     file_cleanup = delete_stored_files(owner, document_id)

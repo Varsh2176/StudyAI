@@ -26,6 +26,7 @@ from app.routes.study_plan import (
     generate_timetable_endpoint
 )
 from app.routes.ai import general_tutor_endpoint, tutor_status_endpoint
+from tests.auth_helpers import auth_user
 from app.services.tutor_service import (
     answer_academic_question,
     get_tutor_status,
@@ -184,7 +185,7 @@ class TestPredictionEndpointAndValidation(unittest.TestCase):
     def test_valid_prediction_request_and_response_structure(self):
         payload = get_valid_payload()
         req = ExamScorePredictionRequest(**payload)
-        res = predict_score_endpoint(req)
+        res = predict_score_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         self.assertIn("predicted_exam_score", res)
         self.assertIn("model_used", res)
@@ -210,7 +211,7 @@ class TestPredictionEndpointAndValidation(unittest.TestCase):
             "Motivation_Level": "High"
         })
         req = ExamScorePredictionRequest(**payload)
-        res = predict_score_endpoint(req)
+        res = predict_score_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         self.assertGreaterEqual(res["predicted_exam_score"], 0.0)
         self.assertLessEqual(res["predicted_exam_score"], 100.0)
@@ -227,7 +228,7 @@ class TestPredictionEndpointAndValidation(unittest.TestCase):
             "Motivation_Level": "Low"
         })
         req = ExamScorePredictionRequest(**payload)
-        res = predict_score_endpoint(req)
+        res = predict_score_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         self.assertGreaterEqual(res["predicted_exam_score"], 0.0)
         self.assertLessEqual(res["predicted_exam_score"], 100.0)
@@ -279,7 +280,7 @@ class TestPredictionEndpointAndValidation(unittest.TestCase):
         req = ExamScorePredictionRequest(**get_valid_payload())
         with patch("app.services.ml_service.load_model", side_effect=FileNotFoundError("Model file missing")):
             with self.assertRaises(HTTPException) as ctx:
-                predict_score_endpoint(req)
+                predict_score_endpoint(req, auth_user(req.email or "alice@example.edu"))
             self.assertEqual(ctx.exception.status_code, 503)
             self.assertIn("Model unavailable", ctx.exception.detail)
 
@@ -427,7 +428,7 @@ class TestStudyHourRecommendation(unittest.TestCase):
             ],
             risk_category="Moderate Risk"
         )
-        res = recommend_study_hours_endpoint(req)
+        res = recommend_study_hours_endpoint(req, auth_user())
         self.assertIn("recommended_weekly_hours", res)
         self.assertIn("recommended_daily_hours", res)
         self.assertIn("subject_breakdown", res)
@@ -448,7 +449,7 @@ class TestStudyHourRecommendation(unittest.TestCase):
             previous_scores=50.0,   # Critical (< 55%) -> 3 pts -> Total >= 6 pts (High Risk)
             predicted_exam_score=52.0
         )
-        res = recommend_study_hours_endpoint(req)
+        res = recommend_study_hours_endpoint(req, auth_user())
         self.assertEqual(res["risk_category_applied"], "High Risk")
         self.assertIsNotNone(res["risk_assessment_details"])
         self.assertGreaterEqual(res["risk_assessment_details"]["risk_score"], 4)
@@ -466,7 +467,7 @@ class TestStudyHourRecommendation(unittest.TestCase):
             previous_scores=68.0,   # Borderline (55-70%) -> 1 pt -> Total 2 pts (Moderate Risk)
             predicted_exam_score=68.0
         )
-        res = recommend_study_hours_endpoint(req)
+        res = recommend_study_hours_endpoint(req, auth_user())
         self.assertEqual(res["risk_category_applied"], "Moderate Risk")
         self.assertIsNotNone(res["risk_assessment_details"])
         self.assertEqual(res["risk_assessment_details"]["risk_category"], "Moderate Risk")
@@ -479,7 +480,7 @@ class TestStudyHourRecommendation(unittest.TestCase):
                 StudyHourSubjectInput(name="Software Engineering", difficulty="Low", current_score=80.0, target_score=85.0)
             ]
         )
-        res = recommend_study_hours_endpoint(req)
+        res = recommend_study_hours_endpoint(req, auth_user())
         self.assertEqual(res["risk_category_applied"], "Low Risk")
 
     def test_custom_burnout_cap_applied(self):
@@ -493,7 +494,7 @@ class TestStudyHourRecommendation(unittest.TestCase):
             risk_category="High Risk",
             max_daily_limit=4.0
         )
-        res = recommend_study_hours_endpoint(req)
+        res = recommend_study_hours_endpoint(req, auth_user())
         self.assertTrue(res["burnout_guardrail_applied"])
         self.assertLessEqual(res["recommended_daily_hours"], 4.0)
         self.assertLessEqual(res["recommended_weekly_hours"], 28.0)
@@ -503,6 +504,8 @@ class TestPreservedBackendRoutes(unittest.TestCase):
     def test_registered_route_paths(self):
         paths = list(app.openapi()["paths"].keys())
         self.assertIn("/auth/register", paths)
+        self.assertIn("/auth/login", paths)
+        self.assertIn("/auth/me", paths)
         self.assertIn("/student/profile", paths)
         self.assertIn("/student/{email}", paths)
         self.assertIn("/predict/exam-score", paths)
@@ -767,7 +770,7 @@ class TestStudyPlanner(unittest.TestCase):
             risk_category="Moderate Risk"
         )
         # 1. Test POST /study-plan/generate
-        res_gen = generate_plan_endpoint(req)
+        res_gen = generate_plan_endpoint(req, auth_user(req.email or "alice@example.edu"))
         self.assertIn("timetable", res_gen)
         self.assertIn("subject_allocations", res_gen)
         self.assertIn("daily_schedule", res_gen)
@@ -777,7 +780,7 @@ class TestStudyPlanner(unittest.TestCase):
         self.assertEqual(res_gen["timetable"][0]["start_time"], "08:30")
 
         # 2. Test POST /study-plan/timetable
-        res_tt = generate_timetable_endpoint(req)
+        res_tt = generate_timetable_endpoint(req, auth_user(req.email or "alice@example.edu"))
         self.assertEqual(res_tt["timetable"], res_gen["timetable"])
         self.assertEqual(res_tt["total_scheduled_study_hours"], res_gen["total_scheduled_study_hours"])
 
@@ -809,7 +812,7 @@ class TestStudyPlanAPI(unittest.TestCase):
             risk_category="Moderate Risk",
             max_daily_limit=8.0
         )
-        plan = generate_plan_endpoint(req)
+        plan = generate_plan_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         # Validate with Pydantic response schema
         validated_plan = StudyPlanResponse(**plan)
@@ -852,7 +855,7 @@ class TestStudyPlanAPI(unittest.TestCase):
             previous_scores=45.0,
             predicted_exam_score=48.0
         )
-        plan = generate_plan_endpoint(req)
+        plan = generate_plan_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         self.assertEqual(plan["risk_category_applied"], "High Risk")
         self.assertIsNotNone(plan["risk_assessment_details"])
@@ -875,7 +878,7 @@ class TestStudyPlanAPI(unittest.TestCase):
             previous_scores=90.0,
             predicted_exam_score=88.0
         )
-        plan = generate_plan_endpoint(req)
+        plan = generate_plan_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         self.assertEqual(plan["risk_category_applied"], "Low Risk")
         self.assertIsNotNone(plan["risk_assessment_details"])
@@ -895,7 +898,7 @@ class TestStudyPlanAPI(unittest.TestCase):
             subjects=[PlanSubject(name="   ", difficulty="Medium")]
         )
         with self.assertRaises(HTTPException) as ctx:
-            generate_plan_endpoint(req_blank)
+            generate_plan_endpoint(req_blank, auth_user(getattr(req_blank, "email", None) or "alice@example.edu"))
         self.assertEqual(ctx.exception.status_code, 400)
 
         # 4. Out-of-range days_to_plan
@@ -928,7 +931,7 @@ class TestStudyPlanAPI(unittest.TestCase):
                 PlanSubject(name="Computer Networks", difficulty="High", current_score=60.0, target_score=85.0)
             ]
         )
-        plan = generate_plan_endpoint(req)
+        plan = generate_plan_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         self.assertTrue(plan["burnout_guardrail_applied"])
         self.assertLessEqual(plan["total_scheduled_study_hours"], 6.0)
@@ -946,8 +949,8 @@ class TestStudyPlanAPI(unittest.TestCase):
             ],
             risk_category="Low Risk"
         )
-        plan1 = generate_plan_endpoint(req)
-        plan2 = generate_plan_endpoint(req)
+        plan1 = generate_plan_endpoint(req, auth_user(req.email or "alice@example.edu"))
+        plan2 = generate_plan_endpoint(req, auth_user(req.email or "alice@example.edu"))
 
         self.assertEqual(plan1["timetable"], plan2["timetable"])
         self.assertEqual(plan1["subject_allocations"], plan2["subject_allocations"])
@@ -1039,7 +1042,7 @@ class TestGeneralAITutorM14(unittest.TestCase):
             return_value=mock_answer,
         ) as mocked:
             req = TutorChatRequest(question="What is polymorphism in OOP?")
-            res = general_tutor_endpoint(req)
+            res = general_tutor_endpoint(req, auth_user())
             self.assertEqual(res["answer"], mock_answer["answer"])
             self.assertEqual(res["provider"], "gemini")
             validated = TutorChatResponse(**res)
@@ -1055,7 +1058,7 @@ class TestGeneralAITutorM14(unittest.TestCase):
         ):
             req = TutorChatRequest(question="Explain recursion.")
             with self.assertRaises(HTTPException) as ctx:
-                general_tutor_endpoint(req)
+                general_tutor_endpoint(req, auth_user())
             self.assertEqual(ctx.exception.status_code, 504)
 
     def test_provider_failure_maps_to_502(self):
@@ -1065,7 +1068,7 @@ class TestGeneralAITutorM14(unittest.TestCase):
         ):
             req = TutorChatRequest(question="Explain stacks.")
             with self.assertRaises(HTTPException) as ctx:
-                general_tutor_endpoint(req)
+                general_tutor_endpoint(req, auth_user())
             self.assertEqual(ctx.exception.status_code, 502)
 
     def test_not_configured_maps_to_503(self):
@@ -1075,7 +1078,7 @@ class TestGeneralAITutorM14(unittest.TestCase):
         ):
             req = TutorChatRequest(question="Explain queues.")
             with self.assertRaises(HTTPException) as ctx:
-                general_tutor_endpoint(req)
+                general_tutor_endpoint(req, auth_user())
             self.assertEqual(ctx.exception.status_code, 503)
 
     def test_tutor_status_endpoint(self):
@@ -1111,21 +1114,23 @@ class TestGeneralAITutorM14(unittest.TestCase):
                 self.assertIn("not grounded in uploaded study notes", result["disclaimer"].lower())
                 gemini_mock.assert_called_once()
 
-    def test_no_login_required_for_tutor_endpoint(self):
-        """Existing student APIs use email optionally; tutor follows the same pattern."""
+    def test_tutor_endpoint_accepts_authenticated_user(self):
+        """M10: tutor requires an authenticated student identity."""
         with patch(
             "app.routes.ai.answer_academic_question",
             return_value={
                 "answer": "OK",
                 "provider": "gemini",
-                "model_used": "gemini-2.5-flash",
+                "model_used": "gemini-3.5-flash-lite",
                 "configured": True,
                 "profile_context_used": False,
                 "disclaimer": "disclaimer",
             },
         ):
-            # No auth header / token required — mirrors /predict and /study-plan.
-            res = general_tutor_endpoint(TutorChatRequest(question="What is a linked list?"))
+            res = general_tutor_endpoint(
+                TutorChatRequest(question="What is a linked list?"),
+                auth_user(),
+            )
             self.assertEqual(res["answer"], "OK")
 
 
@@ -1177,6 +1182,7 @@ class TestPdfDocumentsM15(unittest.TestCase):
         import tempfile
         from app.routes import documents as documents_routes
         from app.services import pdf_document_service as pdf_service
+        from tests.auth_helpers import FakeDocumentsCollection, auth_user
 
         self._tmpdir = tempfile.TemporaryDirectory()
         self._env_patch = patch.dict(
@@ -1188,8 +1194,11 @@ class TestPdfDocumentsM15(unittest.TestCase):
             clear=False,
         )
         self._env_patch.start()
-        # Avoid waiting on Atlas during unit tests; use in-memory + temp disk.
-        self._mongo_patch = patch.object(documents_routes, "documents_collection", None)
+        # Avoid waiting on Atlas during unit tests; use fake Mongo + temp disk.
+        self._fake_docs = FakeDocumentsCollection()
+        self._mongo_patch = patch.object(
+            documents_routes, "documents_collection", self._fake_docs
+        )
         self._mongo_patch.start()
         documents_routes._documents_cache.clear()
         self.addCleanup(self._mongo_patch.stop)
@@ -1198,6 +1207,9 @@ class TestPdfDocumentsM15(unittest.TestCase):
         self.addCleanup(documents_routes._documents_cache.clear)
         self.pdf_service = pdf_service
         self.documents_routes = documents_routes
+        self.alice = auth_user("alice@example.edu", "Alice")
+        self.intruder = auth_user("intruder@example.edu", "Intruder")
+        self.cleanup_user = auth_user("cleanup@example.edu", "Cleanup")
 
     def test_valid_pdf_upload_and_text_extraction(self):
         from fastapi import UploadFile
@@ -1211,6 +1223,7 @@ class TestPdfDocumentsM15(unittest.TestCase):
                 file=upload,
                 email="alice@example.edu",
                 subject="ML",
+                current_user=self.alice,
             )
 
         result = asyncio_run(_run())
@@ -1222,13 +1235,14 @@ class TestPdfDocumentsM15(unittest.TestCase):
         self.assertNotIn("storage_key", result)
         self.assertNotIn("pages", result)
 
-        listed = self.documents_routes.list_documents(email="alice@example.edu")
+        listed = self.documents_routes.list_documents(email="alice@example.edu", current_user=self.alice)
         self.assertEqual(listed["count"], 1)
         self.assertEqual(listed["documents"][0]["document_id"], result["document_id"])
 
         text_payload = self.documents_routes.get_document_extracted_text(
             result["document_id"],
             email="alice@example.edu",
+            current_user=self.alice,
         )
         self.assertTrue(text_payload["text_available"])
         self.assertIn("Gradient descent", text_payload["pages"][0]["text"])
@@ -1249,6 +1263,7 @@ class TestPdfDocumentsM15(unittest.TestCase):
                 file=upload,
                 email="alice@example.edu",
                 subject="General",
+                current_user=self.alice,
             )
 
         with self.assertRaises(HTTPException) as ctx:
@@ -1296,6 +1311,7 @@ class TestPdfDocumentsM15(unittest.TestCase):
                 file=upload,
                 email="   ",
                 subject="General",
+                current_user=self.alice,
             )
 
         with self.assertRaises(HTTPException) as ctx2:
@@ -1311,23 +1327,23 @@ class TestPdfDocumentsM15(unittest.TestCase):
         self.documents_routes._persist_record(record)
         doc_id = record["document_id"]
 
-        other_list = self.documents_routes.list_documents(email="intruder@example.edu")
+        other_list = self.documents_routes.list_documents(email="intruder@example.edu", current_user=self.intruder)
         self.assertEqual(other_list["count"], 0)
 
         with self.assertRaises(HTTPException) as ctx_get:
-            self.documents_routes.get_document_metadata(doc_id, email="intruder@example.edu")
+            self.documents_routes.get_document_metadata(doc_id, email="intruder@example.edu", current_user=self.intruder)
         self.assertEqual(ctx_get.exception.status_code, 404)
 
         with self.assertRaises(HTTPException) as ctx_text:
-            self.documents_routes.get_document_extracted_text(doc_id, email="intruder@example.edu")
+            self.documents_routes.get_document_extracted_text(doc_id, email="intruder@example.edu", current_user=self.intruder)
         self.assertEqual(ctx_text.exception.status_code, 404)
 
         with self.assertRaises(HTTPException) as ctx_del:
-            self.documents_routes.delete_document(doc_id, email="intruder@example.edu")
+            self.documents_routes.delete_document(doc_id, email="intruder@example.edu", current_user=self.intruder)
         self.assertEqual(ctx_del.exception.status_code, 404)
 
         # Owner can still access
-        meta = self.documents_routes.get_document_metadata(doc_id, email="owner@example.edu")
+        meta = self.documents_routes.get_document_metadata(doc_id, email="owner@example.edu", current_user=auth_user("owner@example.edu"))
         self.assertEqual(meta["document_id"], doc_id)
 
     def test_metadata_persistence_and_deletion_cleanup(self):
@@ -1343,12 +1359,12 @@ class TestPdfDocumentsM15(unittest.TestCase):
         pdf_path = Path(self._tmpdir.name) / self.pdf_service.owner_storage_key("cleanup@example.edu") / f"{doc_id}.pdf"
         self.assertTrue(pdf_path.exists())
 
-        deleted = self.documents_routes.delete_document(doc_id, email="cleanup@example.edu")
+        deleted = self.documents_routes.delete_document(doc_id, email="cleanup@example.edu", current_user=self.cleanup_user)
         self.assertEqual(deleted["document_id"], doc_id)
         self.assertFalse(pdf_path.exists())
         self.assertIsNone(self.documents_routes._find_record(doc_id))
 
-        listed = self.documents_routes.list_documents(email="cleanup@example.edu")
+        listed = self.documents_routes.list_documents(email="cleanup@example.edu", current_user=self.cleanup_user)
         self.assertEqual(listed["count"], 0)
 
     def test_storage_failure_surfaces_safely(self):
@@ -1389,6 +1405,7 @@ class TestDocumentRagM16(unittest.TestCase):
         from app.routes import documents as documents_routes
         from app.services import document_rag_service as rag_service
         from app.services import pdf_document_service as pdf_service
+        from tests.auth_helpers import FakeDocumentsCollection
 
         self._tmpdir = tempfile.TemporaryDirectory()
         self._env_patch = patch.dict(
@@ -1403,7 +1420,10 @@ class TestDocumentRagM16(unittest.TestCase):
             clear=False,
         )
         self._env_patch.start()
-        self._mongo_patch = patch.object(documents_routes, "documents_collection", None)
+        self._fake_docs = FakeDocumentsCollection()
+        self._mongo_patch = patch.object(
+            documents_routes, "documents_collection", self._fake_docs
+        )
         self._mongo_patch.start()
         documents_routes._documents_cache.clear()
         self.addCleanup(self._mongo_patch.stop)
@@ -1537,7 +1557,7 @@ class TestDocumentRagM16(unittest.TestCase):
                     question="gradient descent",
                     document_id=record["document_id"],
                 )
-            )
+            , current_user=auth_user("intruder@example.edu"))
         self.assertEqual(http_ctx.exception.status_code, 404)
 
     def test_unindexed_document_ask_rejected(self):
@@ -1550,7 +1570,7 @@ class TestDocumentRagM16(unittest.TestCase):
                     question="What is in the notes?",
                     document_id=record["document_id"],
                 )
-            )
+            , current_user=auth_user("alice@example.edu"))
         self.assertEqual(ctx.exception.status_code, 409)
 
     def test_no_relevant_results_mode(self):
@@ -1589,7 +1609,7 @@ class TestDocumentRagM16(unittest.TestCase):
                 document_id=record["document_id"],
                 top_k=3,
             )
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.assertIn(response["mode"], ("retrieval_only", "llm", "no_results"))
         self.assertEqual(response["document_scope"], "single_document")
 
@@ -1600,7 +1620,7 @@ class TestDocumentRagM16(unittest.TestCase):
         status_before = self.rag_service.get_index_status("alice@example.edu", record["document_id"])
         self.assertEqual(status_before["status"], "indexed")
 
-        deleted = self.documents_routes.delete_document(record["document_id"], email="alice@example.edu")
+        deleted = self.documents_routes.delete_document(record["document_id"], email="alice@example.edu", current_user=auth_user("alice@example.edu"))
         self.assertTrue(deleted["rag_index_deleted"])
         status_after = self.rag_service.get_index_status("alice@example.edu", record["document_id"])
         self.assertEqual(status_after["status"], "not_indexed")
@@ -1746,7 +1766,7 @@ class TestProgressTrackingM17(unittest.TestCase):
                 actual_minutes=50,
                 date="2026-10-10",
             )
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.performance_routes.log_study_session(
             StudySessionLog(
                 email="alice@example.edu",
@@ -1756,7 +1776,7 @@ class TestProgressTrackingM17(unittest.TestCase):
                 planned_minutes=40,
                 date="2026-10-11",
             )
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.performance_routes.log_study_session(
             StudySessionLog(
                 email="alice@example.edu",
@@ -1767,9 +1787,9 @@ class TestProgressTrackingM17(unittest.TestCase):
                 actual_minutes=20,
                 date="2026-10-11",
             )
-        )
+        , current_user=auth_user("alice@example.edu"))
 
-        summary = self.performance_routes.get_performance_summary("alice@example.edu")
+        summary = self.performance_routes.get_performance_summary("alice@example.edu", current_user=auth_user("alice@example.edu"))
         self.assertEqual(summary["persistence"], "mongo")
         self.assertEqual(summary["total_sessions"], 3)
         self.assertEqual(summary["sessions_completed"], 1)
@@ -1794,7 +1814,7 @@ class TestProgressTrackingM17(unittest.TestCase):
                 actual_minutes=50,
                 date="2026-10-11",
             )
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.performance_routes.log_study_session(
             StudySessionLog(
                 email="bob@example.edu",
@@ -1804,21 +1824,21 @@ class TestProgressTrackingM17(unittest.TestCase):
                 actual_minutes=90,
                 date="2026-10-11",
             )
-        )
+        , current_user=auth_user("bob@example.edu"))
 
-        alice = self.performance_routes.get_performance_summary("alice@example.edu")
-        bob = self.performance_routes.get_performance_summary("bob@example.edu")
+        alice = self.performance_routes.get_performance_summary("alice@example.edu", current_user=auth_user("alice@example.edu"))
+        bob = self.performance_routes.get_performance_summary("bob@example.edu", current_user=auth_user("bob@example.edu"))
         self.assertEqual(alice["total_sessions"], 1)
         self.assertEqual(bob["total_sessions"], 1)
         self.assertEqual(alice["planned_versus_actual"]["planned_minutes"], 50)
         self.assertEqual(bob["planned_versus_actual"]["planned_minutes"], 90)
 
-        alice_list = self.performance_routes.list_study_sessions("alice@example.edu")
+        alice_list = self.performance_routes.list_study_sessions("alice@example.edu", current_user=auth_user("alice@example.edu"))
         self.assertEqual(alice_list["count"], 1)
         self.assertTrue(all(s["email"] == "alice@example.edu" for s in alice_list["sessions"]))
 
     def test_empty_progress_summary(self):
-        summary = self.performance_routes.get_performance_summary("newbie@example.edu")
+        summary = self.performance_routes.get_performance_summary("newbie@example.edu", current_user=auth_user("newbie@example.edu"))
         self.assertTrue(summary["empty"])
         self.assertEqual(summary["total_sessions"], 0)
         self.assertEqual(summary["planned_study_hours"], 0.0)
@@ -1835,12 +1855,12 @@ class TestProgressTrackingM17(unittest.TestCase):
                         planned_minutes=50,
                         actual_minutes=50,
                     )
-                )
+                , current_user=auth_user("alice@example.edu"))
             self.assertEqual(ctx.exception.status_code, 503)
             self.assertIn("MongoDB", ctx.exception.detail)
 
             with self.assertRaises(HTTPException) as ctx2:
-                self.performance_routes.get_performance_summary("alice@example.edu")
+                self.performance_routes.get_performance_summary("alice@example.edu", current_user=auth_user("alice@example.edu"))
             self.assertEqual(ctx2.exception.status_code, 503)
 
     def test_build_summary_strips_foreign_rows(self):
@@ -1951,7 +1971,7 @@ class TestAdaptivePlanningM18(unittest.TestCase):
 
         result = self.performance_routes.adapt_study_plan(
             AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.assertFalse(result["unchanged"])
         self.assertTrue(result["repeat_safe"])
         self.assertIn("adapted_plan", result)
@@ -1978,7 +1998,7 @@ class TestAdaptivePlanningM18(unittest.TestCase):
                 daily_available_hours=2.0,
                 plan_date="2026-10-13",
             )
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.assertLessEqual(result["adapted_plan"]["daily_study_hours"], 2.0)
         joined = " ".join(result["adaptations"]).lower()
         self.assertTrue("reduced" in joined or "available" in joined or "missed" in joined)
@@ -1987,7 +2007,7 @@ class TestAdaptivePlanningM18(unittest.TestCase):
         self._session(session_id="m1", status="missed", planned_minutes=40, actual_minutes=0)
         result = self.performance_routes.adapt_study_plan(
             AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
-        )
+        , current_user=auth_user("alice@example.edu"))
         joined = " ".join(result["adaptations"]).lower()
         self.assertTrue("exam" in joined or "missed" in joined)
 
@@ -1995,13 +2015,13 @@ class TestAdaptivePlanningM18(unittest.TestCase):
         self._session(session_id="m1", status="missed", planned_minutes=50, actual_minutes=0)
         first = self.performance_routes.adapt_study_plan(
             AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.assertFalse(first["unchanged"])
         fp1 = first["adaptation_fingerprint"]
 
         second = self.performance_routes.adapt_study_plan(
             AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.assertTrue(second["unchanged"])
         self.assertEqual(second["adaptation_fingerprint"], fp1)
         self.assertIn("fingerprint", " ".join(second["adaptations"]).lower())
@@ -2009,7 +2029,7 @@ class TestAdaptivePlanningM18(unittest.TestCase):
     def test_empty_history_still_returns_plan(self):
         result = self.performance_routes.adapt_study_plan(
             AdaptPlanRequest(email="alice@example.edu", plan_date="2026-10-13")
-        )
+        , current_user=auth_user("alice@example.edu"))
         self.assertFalse(result["unchanged"])
         self.assertTrue(result["progress_snapshot"]["empty"])
         self.assertIn("adapted_plan", result)
@@ -2018,7 +2038,7 @@ class TestAdaptivePlanningM18(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             self.performance_routes.adapt_study_plan(
                 AdaptPlanRequest(email="nobody@example.edu")
-            )
+            , current_user=auth_user("nobody@example.edu"))
         self.assertEqual(ctx.exception.status_code, 404)
 
     def test_database_unavailable_returns_503(self):
@@ -2026,14 +2046,14 @@ class TestAdaptivePlanningM18(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 self.performance_routes.adapt_study_plan(
                     AdaptPlanRequest(email="alice@example.edu")
-                )
+                , current_user=auth_user("alice@example.edu"))
             self.assertEqual(ctx.exception.status_code, 503)
 
         with patch.object(self.performance_routes, "sessions_collection", None):
             with self.assertRaises(HTTPException) as ctx2:
                 self.performance_routes.adapt_study_plan(
                     AdaptPlanRequest(email="alice@example.edu")
-                )
+                , current_user=auth_user("alice@example.edu"))
             self.assertEqual(ctx2.exception.status_code, 503)
 
     def test_ownership_scopes_sessions_to_email(self):
@@ -2056,6 +2076,103 @@ class TestAdaptivePlanningM18(unittest.TestCase):
     def test_adapt_plan_route_registered(self):
         paths = list(app.openapi()["paths"].keys())
         self.assertIn("/performance/adapt-plan", paths)
+
+
+class TestAuthOwnershipM10(unittest.TestCase):
+    """M10 — hashed passwords, access tokens, and cross-student denial."""
+
+    def setUp(self):
+        from app.routes import auth as auth_routes
+        from tests.auth_helpers import FakeUsersCollection, auth_user, mint_token
+
+        self.auth_routes = auth_routes
+        self.users = FakeUsersCollection()
+        self._users_patch = patch.object(auth_routes, "users_collection", self.users)
+        self._users_patch.start()
+        self.addCleanup(self._users_patch.stop)
+        self.auth_user = auth_user
+        self.mint_token = mint_token
+
+    def test_register_hashes_password_and_returns_token(self):
+        from app.routes.auth import RegisterUser
+
+        res = self.auth_routes.register(
+            RegisterUser(name="Alice", email="alice@example.edu", password="password123")
+        )
+        self.assertEqual(res["persistence"], "mongo")
+        self.assertIn("access_token", res)
+        stored = self.users.find_one({"email": "alice@example.edu"})
+        self.assertNotIn("password", stored)
+        self.assertTrue(str(stored["password_hash"]).startswith("scrypt$"))
+        self.assertNotEqual(stored["password_hash"], "password123")
+
+    def test_login_success_and_invalid_credentials(self):
+        from app.routes.auth import LoginUser, RegisterUser
+
+        self.auth_routes.register(
+            RegisterUser(name="Alice", email="alice@example.edu", password="password123")
+        )
+        ok = self.auth_routes.login(
+            LoginUser(email="alice@example.edu", password="password123")
+        )
+        self.assertEqual(ok["message"], "Login successful")
+        self.assertTrue(ok["access_token"])
+
+        with self.assertRaises(HTTPException) as ctx:
+            self.auth_routes.login(
+                LoginUser(email="alice@example.edu", password="wrong-password")
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertIn("Invalid email or password", ctx.exception.detail)
+
+    def test_invalid_and_expired_tokens_rejected(self):
+        from app.deps.auth import get_current_user
+        from app.services.auth_service import create_access_token, decode_access_token
+        from fastapi.security import HTTPAuthorizationCredentials
+
+        with self.assertRaises(HTTPException) as missing:
+            get_current_user(credentials=None)
+        self.assertEqual(missing.exception.status_code, 401)
+
+        with self.assertRaises(HTTPException) as bad:
+            get_current_user(
+                credentials=HTTPAuthorizationCredentials(
+                    scheme="Bearer", credentials="not.a.token"
+                )
+            )
+        self.assertEqual(bad.exception.status_code, 401)
+
+        from app.services import auth_service as svc
+
+        expired = create_access_token(
+            email="alice@example.edu", name="Alice", expires_minutes=-1
+        )["access_token"]
+        with self.assertRaises(svc.InvalidTokenError):
+            decode_access_token(expired)
+
+    def test_cross_student_profile_access_denied(self):
+        from app.routes.student import get_profile
+
+        with patch("app.routes.student.students_collection") as coll:
+            coll.find_one.return_value = {"email": "alice@example.edu", "course": "BTech"}
+            with self.assertRaises(HTTPException) as ctx:
+                get_profile("alice@example.edu", current_user=self.auth_user("bob@example.edu"))
+            self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_memory_registration_disabled_when_mongo_missing(self):
+        from app.routes.auth import RegisterUser
+
+        with patch.object(self.auth_routes, "users_collection", None):
+            with self.assertRaises(HTTPException) as ctx:
+                self.auth_routes.register(
+                    RegisterUser(
+                        name="Alice",
+                        email="offline@example.edu",
+                        password="password123",
+                    )
+                )
+            self.assertEqual(ctx.exception.status_code, 503)
+            self.assertIn("In-memory registration is disabled", ctx.exception.detail)
 
 
 if __name__ == "__main__":

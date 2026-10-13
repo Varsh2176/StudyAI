@@ -1,20 +1,27 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Body
+
+from fastapi import APIRouter, Body, Depends, HTTPException
+
+from app.database.mongodb import study_plans_collection
+from app.deps.auth import get_current_user, require_owned_email
 from app.models.schemas import (
+    StudyHourRecommendationRequest,
+    StudyHourRecommendationResponse,
     StudyPlanGenerateRequest,
     StudyPlanResponse,
-    StudyHourRecommendationRequest,
-    StudyHourRecommendationResponse
 )
+from app.services.auth_service import AuthenticatedUser
 from app.services.scheduler import generate_study_plan
-from app.database.mongodb import study_plans_collection
 
 router = APIRouter(prefix="/study-plan", tags=["Study Plan"])
 
 
 @router.post("", response_model=StudyPlanResponse)
 @router.post("/generate", response_model=StudyPlanResponse)
-def generate_plan_endpoint(request: StudyPlanGenerateRequest):
+def generate_plan_endpoint(
+    request: StudyPlanGenerateRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Integrates M9 Academic Risk Classification, M10 Study-Hour Recommendations,
     and M11 Deterministic Study Scheduling into a unified Study Plan API (Milestone 12).
@@ -25,6 +32,8 @@ def generate_plan_endpoint(request: StudyPlanGenerateRequest):
         from app.database.mongodb import students_collection, predictions_collection
         from app.services.risk_service import evaluate_academic_risk
 
+        owner = require_owned_email(request.email, current_user)
+
         # Validate subjects
         if not request.subjects:
             raise ValueError("At least one subject is required to generate a study plan.")
@@ -32,30 +41,30 @@ def generate_plan_endpoint(request: StudyPlanGenerateRequest):
             if not s.name or not s.name.strip():
                 raise ValueError("Subject name cannot be empty.")
 
-        # Check student profile if email is provided and daily_available_hours not explicitly set
+        # Check student profile if daily_available_hours not explicitly set
         avail_hours = request.daily_available_hours
         profile = None
-        if request.email and students_collection is not None:
+        if students_collection is not None:
             try:
-                profile = students_collection.find_one({"email": request.email})
+                profile = students_collection.find_one({"email": owner})
                 if profile and profile.get("study_hours") and avail_hours is None:
                     avail_hours = float(profile["study_hours"])
             except Exception as pe:
-                print(f"Non-fatal error retrieving student profile in study plan: {pe}")
+                print(f"Non-fatal error retrieving student profile in study plan: {type(pe).__name__}")
 
         # Check for prior prediction record in MongoDB if risk category not provided
         recent_pred = None
         risk_cat = request.risk_category
         risk_info = None
 
-        if not risk_cat and request.email and predictions_collection is not None:
+        if not risk_cat and predictions_collection is not None:
             try:
                 recent_pred = predictions_collection.find_one(
-                    {"email": request.email},
+                    {"email": owner},
                     sort=[("created_at", -1)]
                 )
             except Exception as pre_err:
-                print(f"Non-fatal error retrieving recent prediction: {pre_err}")
+                print(f"Non-fatal error retrieving recent prediction: {type(pre_err).__name__}")
 
         # Dynamically derive risk classification if not provided explicitly
         if not risk_cat:
@@ -105,46 +114,63 @@ def generate_plan_endpoint(request: StudyPlanGenerateRequest):
             risk_details=risk_info
         )
 
-        # If student email is provided, save or update their active plan in MongoDB
-        if request.email and study_plans_collection is not None:
+        # Persist plan for the authenticated student only
+        if study_plans_collection is not None:
             try:
                 record = {
-                    "email": request.email,
+                    "email": owner,
                     "plan": plan,
-                    "updated_at": datetime.now(timezone.utc).isoformat()
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 study_plans_collection.update_one(
-                    {"email": request.email},
+                    {"email": owner},
                     {"$set": record},
-                    upsert=True
+                    upsert=True,
                 )
             except Exception as db_err:
-                print(f"Non-fatal error persisting study plan: {db_err}")
+                print(f"Non-fatal error persisting study plan: {type(db_err).__name__}")
 
         return plan
+    except HTTPException:
+        raise
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate study timetable: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate study timetable.") from e
 
 
 @router.post("/timetable", response_model=StudyPlanResponse)
-def generate_timetable_endpoint(request: StudyPlanGenerateRequest):
+def generate_timetable_endpoint(
+    request: StudyPlanGenerateRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Direct alias endpoint to generate a deterministic daily study timetable (Milestone 11).
     """
-    return generate_plan_endpoint(request)
+    return generate_plan_endpoint(request, current_user)
+
+
+@router.get("/me")
+def get_my_study_plan(current_user: AuthenticatedUser = Depends(get_current_user)):
+    return get_student_study_plan(current_user.email, current_user)
 
 
 @router.get("/{email}")
-def get_student_study_plan(email: str):
-    """Fetches the currently active study plan for a student."""
+def get_student_study_plan(
+    email: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Fetches the currently active study plan for the authenticated student."""
+    owner = require_owned_email(email, current_user)
     if study_plans_collection is None:
-        return {"plan": None}
+        raise HTTPException(
+            status_code=503,
+            detail="Study plan storage is unavailable because MongoDB is not connected.",
+        )
 
-    record = study_plans_collection.find_one({"email": email}, {"_id": 0})
+    record = study_plans_collection.find_one({"email": owner}, {"_id": 0})
     if not record:
-        return {"message": "No active study plan found", "plan": None}
+        return {"message": "No active study plan found", "plan": None, "email": owner}
 
     return record
 
@@ -153,13 +179,18 @@ def get_student_study_plan(email: str):
 def toggle_slot_completion(
     email: str,
     day_key: str = Body(..., embed=True),
-    slot_id: str = Body(..., embed=True)
+    slot_id: str = Body(..., embed=True),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Toggles completion status of a specific slot in the student's weekly study plan."""
+    owner = require_owned_email(email, current_user)
     if study_plans_collection is None:
-        return {"message": "Database unavailable"}
+        raise HTTPException(
+            status_code=503,
+            detail="Study plan storage is unavailable because MongoDB is not connected.",
+        )
 
-    record = study_plans_collection.find_one({"email": email})
+    record = study_plans_collection.find_one({"email": owner})
     if not record or "plan" not in record:
         raise HTTPException(status_code=404, detail="Study plan not found")
 
@@ -171,15 +202,23 @@ def toggle_slot_completion(
                 break
 
     study_plans_collection.update_one(
-        {"email": email},
-        {"$set": {"plan.weekly_schedule": weekly, "updated_at": datetime.now(timezone.utc).isoformat()}}
+        {"email": owner},
+        {
+            "$set": {
+                "plan.weekly_schedule": weekly,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
 
-    return {"message": "Slot status updated", "weekly_schedule": weekly}
+    return {"message": "Slot status updated", "weekly_schedule": weekly, "email": owner}
 
 
 @router.post("/recommend-hours", response_model=StudyHourRecommendationResponse)
-def recommend_study_hours_endpoint(request: StudyHourRecommendationRequest):
+def recommend_study_hours_endpoint(
+    request: StudyHourRecommendationRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Computes personalized daily and weekly study hours for the student and per subject
     based on availability, subject difficulty, current vs. goal performance gaps,
@@ -190,29 +229,31 @@ def recommend_study_hours_endpoint(request: StudyHourRecommendationRequest):
         from app.services.risk_service import evaluate_academic_risk
         from app.database.mongodb import students_collection, predictions_collection
 
+        owner = require_owned_email(request.email, current_user)
+
         daily_available = request.daily_available_hours
         risk_cat = request.risk_category
         risk_info = None
 
         profile = None
-        if request.email and students_collection is not None:
+        if students_collection is not None:
             try:
-                profile = students_collection.find_one({"email": request.email})
+                profile = students_collection.find_one({"email": owner})
                 if profile and profile.get("study_hours") and request.daily_available_hours == 4.0:
                     daily_available = float(profile["study_hours"])
             except Exception as pe:
-                print(f"Non-fatal error retrieving student profile: {pe}")
+                print(f"Non-fatal error retrieving student profile: {type(pe).__name__}")
 
         # Check for prior prediction record in MongoDB if risk category not provided
         recent_pred = None
-        if not risk_cat and request.email and predictions_collection is not None:
+        if not risk_cat and predictions_collection is not None:
             try:
                 recent_pred = predictions_collection.find_one(
-                    {"email": request.email},
+                    {"email": owner},
                     sort=[("created_at", -1)]
                 )
             except Exception as pre_err:
-                print(f"Non-fatal error retrieving recent prediction: {pre_err}")
+                print(f"Non-fatal error retrieving recent prediction: {type(pre_err).__name__}")
 
         # Dynamically derive risk classification if not provided explicitly
         if not risk_cat:
@@ -256,7 +297,12 @@ def recommend_study_hours_endpoint(request: StudyHourRecommendationRequest):
         )
 
         return recommendation
+    except HTTPException:
+        raise
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to calculate study hour recommendation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to calculate study hour recommendation.",
+        ) from e

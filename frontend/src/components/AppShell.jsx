@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/useAuth";
 import Navbar from "./Navbar";
 import { Button, Modal } from "./ui";
+import { IconClose, IconMenu } from "./ui/Icons";
+import { ThemeSelector } from "../theme";
 
 const PAGE_TITLES = {
   "/dashboard": "Dashboard",
+  "/hub": "AI Learning Hub",
+  "/hub/summary": "Summary Notes",
+  "/hub/flashcards": "Flashcards",
+  "/hub/mindmap": "Mind Maps",
+  "/hub/practice": "Practice Questions",
+  "/hub/mock-exam": "Mock Exams",
   "/predict": "Predict Score & Risk",
   "/planner": "Study Planner",
   "/tutor": "AI Tutor",
@@ -13,22 +22,41 @@ const PAGE_TITLES = {
   "/profile": "Student Profile",
 };
 
+const PAGE_SUBTITLES = {
+  "/dashboard": "Your study overview and saved insights",
+  "/hub": "Discover and open study tools",
+  "/hub/summary": "Topic or notes-based study summaries",
+  "/hub/flashcards": "Active recall cards from the AI Tutor",
+  "/hub/mindmap": "Concept hierarchy from the AI Tutor",
+  "/hub/practice": "Topic drills with revealable answers",
+  "/hub/mock-exam": "Short generated practice assessments",
+  "/predict": "Exam score prediction and academic risk",
+  "/planner": "Adaptive schedules from your profile and risk",
+  "/tutor": "Ask questions grounded in your materials",
+  "/documents": "Upload, index, and manage study PDFs",
+  "/progress": "Track planned versus completed study work",
+  "/profile": "Academic background used across StudyWise",
+};
+
 function titleForPath(pathname) {
   return PAGE_TITLES[pathname] || "StudyWise AI";
 }
 
+function subtitleForPath(pathname) {
+  return PAGE_SUBTITLES[pathname] || "";
+}
+
 /**
  * App chrome: fixed sidebar (desktop), accessible mobile drawer, sticky header.
- * Page components render via <Outlet /> — pages themselves are not modified in Phase 1.
- *
- * Drawer open state is tied to location.key so route changes close it without
- * setState-inside-effect (satisfies react-hooks/set-state-in-effect).
+ * Switch Student clears only localStorage.student_email — no backend call.
  */
 function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { email: studentEmail, name: studentName, logout } = useAuth();
   const [drawerKey, setDrawerKey] = useState(null);
-  const [switchOpen, setSwitchOpen] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const drawerOpen = drawerKey === location.key;
   const toggleRef = useRef(null);
   const sidebarRef = useRef(null);
@@ -43,7 +71,7 @@ function AppShell() {
     setDrawerKey((current) => (current === location.key ? null : location.key));
   }, [location.key]);
 
-  // Lock body scroll while drawer is open
+
   useEffect(() => {
     if (drawerOpen) {
       document.body.classList.add("sw-drawer-lock");
@@ -55,7 +83,6 @@ function AppShell() {
     };
   }, [drawerOpen]);
 
-  // Esc closes; focus moves into drawer on open and back to toggle on close
   useEffect(() => {
     if (!drawerOpen) return undefined;
 
@@ -89,15 +116,20 @@ function AppShell() {
     };
   }, [drawerOpen]);
 
-  const confirmSwitchStudent = () => {
-    // Clears only the app's existing local identity key — no backend call.
-    localStorage.removeItem("student_email");
-    setSwitchOpen(false);
-    setDrawerKey(null);
-    navigate("/");
+  const confirmLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await logout();
+      setLogoutOpen(false);
+      setDrawerKey(null);
+      navigate("/login", { replace: true });
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   const pageTitle = titleForPath(location.pathname);
+  const pageSubtitle = subtitleForPath(location.pathname);
 
   return (
     <div className={`sw-shell${drawerOpen ? " sw-drawer-open" : ""}`}>
@@ -117,11 +149,49 @@ function AppShell() {
         aria-label="Application"
         tabIndex={-1}
       >
-        <Link to="/dashboard" className="sw-sidebar-brand" onClick={closeDrawer}>
-          StudyWise AI
-        </Link>
+        <div className="sw-sidebar-top">
+          <Link to="/dashboard" className="sw-sidebar-brand" onClick={closeDrawer}>
+            <span className="sw-sidebar-mark" aria-hidden="true">
+              SW
+            </span>
+            <span className="sw-sidebar-brand-text">
+              <span className="sw-sidebar-brand-name">StudyWise AI</span>
+              <span className="sw-sidebar-brand-tag">Study platform</span>
+            </span>
+          </Link>
+          <button
+            type="button"
+            className="sw-sidebar-close"
+            aria-label="Close navigation menu"
+            onClick={closeDrawer}
+          >
+            <IconClose size={18} />
+          </button>
+        </div>
+
+        <p className="sw-sidebar-section-label" id={`${navId}-label`}>
+          Navigate
+        </p>
         <div className="sw-sidebar-nav">
           <Navbar variant="sidebar" navId={navId} onNavigate={closeDrawer} />
+        </div>
+
+        <div className="sw-sidebar-footer">
+          {studentEmail ? (
+            <div className="sw-sidebar-student" title={studentEmail}>
+              <span className="sw-sidebar-student-label">
+                {studentName ? studentName : "Signed in"}
+              </span>
+              <span className="sw-sidebar-student-email">{studentEmail}</span>
+            </div>
+          ) : (
+            <div className="sw-sidebar-student sw-sidebar-student--empty">
+              <span className="sw-sidebar-student-label">Not signed in</span>
+              <Link to="/login" className="sw-sidebar-student-link" onClick={closeDrawer}>
+                Sign in
+              </Link>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -136,17 +206,30 @@ function AppShell() {
             aria-label={drawerOpen ? "Close navigation menu" : "Open navigation menu"}
             onClick={toggleDrawer}
           >
-            <span className="sw-menu-toggle-icon" aria-hidden="true" />
+            <IconMenu size={20} />
           </button>
-          <h1 className="sw-page-title">{pageTitle}</h1>
+
+          <div className="sw-page-heading">
+            <h1 className="sw-page-title">{pageTitle}</h1>
+            {pageSubtitle ? (
+              <p className="sw-page-subtitle">{pageSubtitle}</p>
+            ) : null}
+          </div>
+
           <div className="sw-header-actions">
+            {studentEmail ? (
+              <span className="sw-header-student" title={studentEmail}>
+                {studentEmail}
+              </span>
+            ) : null}
+            <ThemeSelector size="sm" />
             <Button
               type="button"
               variant="secondary"
               size="sm"
-              onClick={() => setSwitchOpen(true)}
+              onClick={() => setLogoutOpen(true)}
             >
-              Switch student
+              Sign out
             </Button>
           </div>
         </header>
@@ -157,24 +240,29 @@ function AppShell() {
       </div>
 
       <Modal
-        open={switchOpen}
-        title="Switch student?"
-        onClose={() => setSwitchOpen(false)}
+        open={logoutOpen}
+        title="Sign out?"
+        onClose={() => setLogoutOpen(false)}
         footer={
           <>
-            <Button type="button" variant="secondary" onClick={() => setSwitchOpen(false)}>
+            <Button type="button" variant="secondary" onClick={() => setLogoutOpen(false)}>
               Cancel
             </Button>
-            <Button type="button" variant="primary" onClick={confirmSwitchStudent}>
-              Switch student
+            <Button
+              type="button"
+              variant="primary"
+              loading={loggingOut}
+              disabled={loggingOut}
+              onClick={confirmLogout}
+            >
+              Sign out
             </Button>
           </>
         }
       >
         <p>
-          This clears the locally stored student email on this device and returns you to
-          registration so you can continue as a different student. It does not call the server
-          or delete any account data.
+          This discards your access token on this device. Your MongoDB account and study data
+          remain on the server. Sign in again to continue.
         </p>
       </Modal>
     </div>

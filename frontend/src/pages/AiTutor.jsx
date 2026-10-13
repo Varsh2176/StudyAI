@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Link } from "react-router-dom";
 import API from "../services/api";
 import {
   Badge,
@@ -199,6 +200,7 @@ function AiTutor() {
 
       setError(messageText);
       setLastFailedQuestion(trimmed);
+      setQuestion(trimmed);
       setMessages((prev) => [
         ...prev,
         {
@@ -265,15 +267,23 @@ function AiTutor() {
 
   return (
     <div className="sw-tutor page-container">
-      <section className="sw-tutor-intro" aria-labelledby="tutor-heading">
-        <h2 id="tutor-heading">AI study tutor</h2>
-        <p>
-          Ask academic questions and get clear, student-friendly explanations.
-          Conversation history stays in this browser session and is not saved to the database.
-        </p>
-      </section>
+      <div className="sw-tutor-hero">
+        <section className="sw-tutor-intro" aria-labelledby="tutor-heading">
+          <p className="sw-tutor-eyebrow">Gemini-powered help</p>
+          <h2 id="tutor-heading">AI study tutor</h2>
+          <p>
+            Ask academic questions and get clear, student-friendly explanations.
+            Conversation history stays in this browser session and is not saved to the database.
+          </p>
+        </section>
+        <div className="sw-tutor-hero-actions">
+          <Link to="/documents" className="sw-btn sw-btn--secondary sw-btn--sm">
+            Ask about uploaded PDFs
+          </Link>
+        </div>
+      </div>
 
-      <Card title="Tutor service">
+      <Card title="Tutor service" className="sw-tutor-status-card">
         <div className="sw-tutor-status-row">
           <div>
             {statusLoading ? (
@@ -307,11 +317,18 @@ function AiTutor() {
             To enable live answers, add <code>GEMINI_API_KEY</code> to <code>backend/.env</code>, restart
             uvicorn, then refresh this status. The chat UI still works for testing empty/error handling
             without credentials — responses will show a clear configuration error (not a fake AI answer).
+            For questions grounded in your PDFs, use{" "}
+            <Link to="/documents">Documents → Ask your notes</Link>.
           </div>
-        ) : null}
+        ) : (
+          <p className="sw-tutor-docs-link">
+            Prefer answers grounded in your uploaded notes?{" "}
+            <Link to="/documents#ask-notes">Open document RAG on Documents</Link>.
+          </p>
+        )}
       </Card>
 
-      <Card>
+      <Card className="sw-tutor-chat-card">
         <div className="sw-tutor-toolbar">
           <h3>Conversation</h3>
           <Button

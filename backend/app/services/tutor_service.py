@@ -15,7 +15,8 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# gemini-2.5-flash returns HTTP 404 for new API keys; use a current generateContent model.
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_TIMEOUT_SECONDS = 20
 MAX_HISTORY_MESSAGES = 20
 DISCLAIMER = (

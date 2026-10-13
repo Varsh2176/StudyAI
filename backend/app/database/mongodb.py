@@ -1,3 +1,4 @@
+import atexit
 import os
 import re
 import socket
@@ -58,6 +59,25 @@ except Exception as e:
     quizzes_collection = None
     notes_collection = None
     documents_collection = None
+
+
+def close_mongo_client() -> None:
+    """Idempotent MongoClient shutdown (lifespan + atexit / unittest process exit)."""
+    global client
+    if client is None:
+        return
+    try:
+        client.close()
+    except Exception as exc:
+        print(f"Warning: MongoClient close failed: {type(exc).__name__}")
+    finally:
+        # Keep module-level `client` as the closed instance for status introspection;
+        # do not recreate here.
+        pass
+
+
+if client is not None:
+    atexit.register(close_mongo_client)
 
 
 def _redact_error_message(message: str) -> str:
@@ -241,8 +261,9 @@ def _finalize_diagnosis(stages, summary_status, failure_stage, recommendations) 
         "stages": stages,
         "recommendations": recommendations,
         "persistence_note": (
-            "When status is not 'connected', MongoDB-backed features may fail or use temporary "
-            "in-memory fallbacks that are NOT durable across server restarts."
+            "When status is not 'connected', most MongoDB-backed features return errors (503). "
+            "Registration alone may use a temporary in-memory fallback that is NOT durable "
+            "across server restarts and must not be treated as production persistence."
         ),
     }
 

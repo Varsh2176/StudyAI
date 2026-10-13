@@ -54,7 +54,9 @@ function Dashboard() {
   const [emailInput, setEmailInput] = useState(
     () => localStorage.getItem("student_email") || ""
   );
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(
+    () => localStorage.getItem("student_email") || ""
+  );
   const [profile, setProfile] = useState(null);
   const [latestPrediction, setLatestPrediction] = useState(null);
   const [studyPlan, setStudyPlan] = useState(null);
@@ -79,6 +81,7 @@ function Dashboard() {
     setLoadNotes([]);
     setEmail(trimmed);
     localStorage.setItem("student_email", trimmed);
+    window.dispatchEvent(new Event("studyai-identity-changed"));
 
     const notes = [];
     let nextProfile = null;
@@ -236,21 +239,39 @@ function Dashboard() {
   }, 0);
 
   const welcomeLine = profile?.course
-    ? `${profile.course}${profile.branch ? ` · ${profile.branch}` : ""}`
+    ? `${profile.course}${profile.branch ? ` · ${profile.branch}` : ""}${
+        profile.year != null && profile.year !== "" ? ` · Year ${profile.year}` : ""
+      }`
     : email
-      ? `Signed in as ${email}`
-      : "Load your student email to see live academic data.";
+      ? `Showing saved data for ${email}`
+      : "Load the student email you used at registration to see live academic data.";
+
+  const welcomeTitle = profile?.course
+    ? "Welcome back"
+    : email
+      ? "Student overview"
+      : "Your study dashboard";
 
   return (
     <div className="sw-dash page-container">
       <section className="sw-dash-welcome" aria-labelledby="dash-welcome-heading">
-        <h2 id="dash-welcome-heading">
-          {profile?.course ? `Welcome back` : "Student overview"}
-        </h2>
+        <p className="sw-dash-welcome-eyebrow">StudyWise AI</p>
+        <h2 id="dash-welcome-heading">{welcomeTitle}</h2>
         <p>{welcomeLine}</p>
+        {email || profile ? (
+          <div className="sw-dash-welcome-meta">
+            {email ? <Badge variant="primary">{email}</Badge> : null}
+            {riskCategory ? (
+              <Badge variant={riskToBadgeVariant(riskCategory)}>{riskCategory}</Badge>
+            ) : null}
+            {studyPlan?.plan_date ? (
+              <Badge variant="info">Plan: {studyPlan.plan_date}</Badge>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
-      <Card title="Load student data">
+      <Card title="Load student data" className="sw-dash-load-card">
         <form className="sw-dash-email-form" onSubmit={handleLoadSubmit}>
           <Input
             id="dashboard-email"
@@ -260,6 +281,7 @@ function Dashboard() {
             value={emailInput}
             onChange={(e) => setEmailInput(e.target.value)}
             required
+            hint="Uses the same local identity key as the rest of the app."
           />
           <div className="sw-dash-email-actions">
             <Button type="submit" variant="primary" loading={loading} disabled={loading}>
@@ -322,72 +344,77 @@ function Dashboard() {
             </div>
           ) : null}
 
-          <div className="sw-dash-stats">
-            <Card title="Predicted exam score">
-              {scoreNum !== null ? (
-                <div className="sw-dash-stat-value">
-                  {scoreNum}
-                  <span className="sw-dash-stat-muted"> / 100</span>
-                </div>
-              ) : (
-                <p className="sw-dash-stat-na">Not available yet</p>
-              )}
-              {scoreNum === null ? (
-                <Link to="/predict" className="sw-btn sw-btn--secondary sw-btn--sm sw-dash-action-link">
-                  Predict Score
-                </Link>
-              ) : null}
-            </Card>
-
-            <Card title="Academic risk">
-              {riskCategory ? (
-                <div className="sw-dash-stat-value" style={{ fontSize: "var(--sw-text-lg)" }}>
-                  <Badge variant={riskToBadgeVariant(riskCategory)}>{riskCategory}</Badge>
-                </div>
-              ) : (
-                <p className="sw-dash-stat-na">Not available yet</p>
-              )}
-              {!riskCategory ? (
-                <Link to="/predict" className="sw-btn sw-btn--secondary sw-btn--sm sw-dash-action-link">
-                  Assess Risk
-                </Link>
-              ) : null}
-            </Card>
-
-            <Card title="Recommended study hours">
-              {dailyHoursNum !== null ? (
-                <>
+          <section className="sw-dash-section" aria-labelledby="dash-overview-heading">
+            <h3 id="dash-overview-heading" className="sw-dash-section-heading">
+              Study overview
+            </h3>
+            <div className="sw-dash-stats">
+              <Card title="Predicted exam score" className="sw-dash-stat-card">
+                {scoreNum !== null ? (
                   <div className="sw-dash-stat-value">
-                    {dailyHoursNum}
+                    {scoreNum}
+                    <span className="sw-dash-stat-muted"> / 100</span>
+                  </div>
+                ) : (
+                  <p className="sw-dash-stat-na">Not available yet</p>
+                )}
+                {scoreNum === null ? (
+                  <Link to="/predict" className="sw-btn sw-btn--secondary sw-btn--sm sw-dash-action-link">
+                    Predict Score
+                  </Link>
+                ) : null}
+              </Card>
+
+              <Card title="Academic risk" className="sw-dash-stat-card">
+                {riskCategory ? (
+                  <div className="sw-dash-stat-value">
+                    <Badge variant={riskToBadgeVariant(riskCategory)}>{riskCategory}</Badge>
+                  </div>
+                ) : (
+                  <p className="sw-dash-stat-na">Not available yet</p>
+                )}
+                {!riskCategory ? (
+                  <Link to="/predict" className="sw-btn sw-btn--secondary sw-btn--sm sw-dash-action-link">
+                    Assess Risk
+                  </Link>
+                ) : null}
+              </Card>
+
+              <Card title="Recommended study hours" className="sw-dash-stat-card">
+                {dailyHoursNum !== null ? (
+                  <>
+                    <div className="sw-dash-stat-value">
+                      {dailyHoursNum}
+                      <span className="sw-dash-stat-muted"> hrs/day</span>
+                    </div>
+                    {weeklyHoursNum !== null ? (
+                      <div className="sw-dash-stat-muted">{weeklyHoursNum} hrs/week</div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="sw-dash-stat-na">Not available yet</p>
+                )}
+                {dailyHoursNum === null ? (
+                  <Link to="/planner" className="sw-btn sw-btn--secondary sw-btn--sm sw-dash-action-link">
+                    Generate Plan
+                  </Link>
+                ) : null}
+              </Card>
+
+              <Card title="Daily availability" className="sw-dash-stat-card">
+                {availabilityNum !== null ? (
+                  <div className="sw-dash-stat-value">
+                    {availabilityNum}
                     <span className="sw-dash-stat-muted"> hrs/day</span>
                   </div>
-                  {weeklyHoursNum !== null ? (
-                    <div className="sw-dash-stat-muted">{weeklyHoursNum} hrs/week</div>
-                  ) : null}
-                </>
-              ) : (
-                <p className="sw-dash-stat-na">Not available yet</p>
-              )}
-              {dailyHoursNum === null ? (
-                <Link to="/planner" className="sw-btn sw-btn--secondary sw-btn--sm sw-dash-action-link">
-                  Generate Plan
-                </Link>
-              ) : null}
-            </Card>
+                ) : (
+                  <p className="sw-dash-stat-na">Not available yet</p>
+                )}
+              </Card>
+            </div>
+          </section>
 
-            <Card title="Daily availability">
-              {availabilityNum !== null ? (
-                <div className="sw-dash-stat-value">
-                  {availabilityNum}
-                  <span className="sw-dash-stat-muted"> hrs/day</span>
-                </div>
-              ) : (
-                <p className="sw-dash-stat-na">Not available yet</p>
-              )}
-            </Card>
-          </div>
-
-          <Card title="Today's study progress">
+          <Card title="Study progress" className="sw-dash-section">
             {todayProgressAvailable && todayProgressPercent !== null ? (
               <ProgressBar
                 value={todayProgressPercent}
@@ -411,31 +438,49 @@ function Dashboard() {
             )}
           </Card>
 
-          <Card
-            title="Quick actions"
-            action={null}
-          >
+          <section className="sw-dash-section" aria-labelledby="dash-quick-heading">
+            <h3 id="dash-quick-heading" className="sw-dash-section-heading">
+              Quick access
+            </h3>
             <nav className="sw-dash-actions" aria-label="Dashboard quick actions">
-              <Link to="/predict" className="sw-btn sw-btn--secondary sw-btn--md sw-dash-action-link">
-                <IconPredict size={18} /> Predict
+              <Link to="/predict" className="sw-dash-action-tile">
+                <span className="sw-dash-action-tile-icon">
+                  <IconPredict size={18} />
+                </span>
+                <span className="sw-dash-action-tile-label">Predict Score</span>
               </Link>
-              <Link to="/planner" className="sw-btn sw-btn--secondary sw-btn--md sw-dash-action-link">
-                <IconPlanner size={18} /> Planner
+              <Link to="/planner" className="sw-dash-action-tile">
+                <span className="sw-dash-action-tile-icon">
+                  <IconPlanner size={18} />
+                </span>
+                <span className="sw-dash-action-tile-label">Study Planner</span>
               </Link>
-              <Link to="/tutor" className="sw-btn sw-btn--secondary sw-btn--md sw-dash-action-link">
-                <IconTutor size={18} /> AI Tutor
+              <Link to="/tutor" className="sw-dash-action-tile">
+                <span className="sw-dash-action-tile-icon">
+                  <IconTutor size={18} />
+                </span>
+                <span className="sw-dash-action-tile-label">AI Tutor</span>
               </Link>
-              <Link to="/documents" className="sw-btn sw-btn--secondary sw-btn--md sw-dash-action-link">
-                <IconDocuments size={18} /> Documents
+              <Link to="/documents" className="sw-dash-action-tile">
+                <span className="sw-dash-action-tile-icon">
+                  <IconDocuments size={18} />
+                </span>
+                <span className="sw-dash-action-tile-label">Documents</span>
               </Link>
-              <Link to="/progress" className="sw-btn sw-btn--secondary sw-btn--md sw-dash-action-link">
-                <IconProgress size={18} /> Progress
+              <Link to="/progress" className="sw-dash-action-tile">
+                <span className="sw-dash-action-tile-icon">
+                  <IconProgress size={18} />
+                </span>
+                <span className="sw-dash-action-tile-label">Progress</span>
               </Link>
-              <Link to="/profile" className="sw-btn sw-btn--secondary sw-btn--md sw-dash-action-link">
-                <IconProfile size={18} /> Profile
+              <Link to="/profile" className="sw-dash-action-tile">
+                <span className="sw-dash-action-tile-icon">
+                  <IconProfile size={18} />
+                </span>
+                <span className="sw-dash-action-tile-label">Profile</span>
               </Link>
             </nav>
-          </Card>
+          </section>
 
           <Card
             title="Student profile"
@@ -521,7 +566,7 @@ function Dashboard() {
                     />
                   ) : null}
                   {latestPrediction?.model_used ? (
-                    <p className="sw-dash-stat-muted" style={{ marginTop: "var(--sw-space-3)" }}>
+                    <p className="sw-dash-stat-muted sw-dash-model-meta">
                       Model: <strong>{latestPrediction.model_used}</strong>
                       {latestPrediction.created_at ? (
                         <> · Saved {new Date(latestPrediction.created_at).toLocaleString()}</>
@@ -531,19 +576,19 @@ function Dashboard() {
                 </div>
 
                 <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--sw-space-3)", gap: "var(--sw-space-3)", flexWrap: "wrap" }}>
+                  <div className="sw-dash-risk-header">
                     <strong>Risk assessment</strong>
                     {riskCategory ? (
                       <Badge variant={riskToBadgeVariant(riskCategory)}>{riskCategory}</Badge>
                     ) : null}
                   </div>
                   {riskAssessment?.concise_explanation ? (
-                    <p style={{ fontSize: "var(--sw-text-sm)", color: "var(--sw-text)", marginTop: 0 }}>
+                    <p className="sw-dash-risk-copy">
                       {riskAssessment.concise_explanation}
                     </p>
                   ) : null}
                   {riskAssessment?.relevant_indicators?.length > 0 ? (
-                    <ul style={{ margin: "0 0 var(--sw-space-3) 0", paddingLeft: "1.25rem", fontSize: "var(--sw-text-sm)", color: "var(--sw-text-muted)" }}>
+                    <ul className="sw-dash-risk-list">
                       {riskAssessment.relevant_indicators.map((ind, i) => (
                         <li key={i}>
                           <strong>{ind.indicator} ({ind.value})</strong>: {ind.message}
@@ -646,14 +691,12 @@ function Dashboard() {
                 {(studyPlan.summary || studyPlan.notes) && (
                   <div className="sw-dash-plan-meta">
                     {studyPlan.summary ? (
-                      <p style={{ margin: "0 0 var(--sw-space-2) 0", fontSize: "var(--sw-text-sm)" }}>
-                        {studyPlan.summary}
-                      </p>
+                      <p className="sw-dash-plan-summary">{studyPlan.summary}</p>
                     ) : null}
                     {studyPlan.notes ? (
-                      <p className="sw-dash-stat-muted" style={{ margin: 0 }}>{studyPlan.notes}</p>
+                      <p className="sw-dash-stat-muted sw-dash-plan-notes">{studyPlan.notes}</p>
                     ) : null}
-                    <div className="sw-dash-chip-row" style={{ marginTop: "var(--sw-space-3)" }}>
+                    <div className="sw-dash-chip-row sw-dash-plan-chips">
                       {studyPlan.risk_category_applied ? (
                         <Badge variant={riskToBadgeVariant(studyPlan.risk_category_applied)}>
                           Plan risk: {studyPlan.risk_category_applied}
@@ -747,8 +790,7 @@ function Dashboard() {
                             return (
                               <div
                                 key={slot.slot_id || idx}
-                                className="sw-dash-session"
-                                style={{ opacity: slot.completed ? 0.75 : 1 }}
+                                className={`sw-dash-session${slot.completed ? " sw-dash-session--done" : ""}`}
                               >
                                 <div
                                   className="sw-dash-session-accent"

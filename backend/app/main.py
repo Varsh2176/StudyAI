@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,11 +13,33 @@ from app.routes.performance import router as performance_router
 from app.routes.documents import router as documents_router
 from app.services.ml_service import load_model, get_model_metadata
 from app.database.mongodb import (
-    client,
+    close_mongo_client,
     db,
     diagnose_mongodb_connectivity,
     get_database_status_summary,
 )
+
+
+# Local-development CORS defaults. Production should set CORS_ORIGINS explicitly.
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:3000",
+]
+
+
+def get_cors_origins() -> list[str]:
+    """
+    Comma-separated CORS_ORIGINS from the environment, or local-dev defaults.
+    Example production value: https://app.example.com,https://www.example.com
+    """
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if not raw:
+        return list(_DEFAULT_CORS_ORIGINS)
+    origins = [part.strip() for part in raw.split(",") if part.strip()]
+    return origins or list(_DEFAULT_CORS_ORIGINS)
 
 
 @asynccontextmanager
@@ -27,7 +51,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Failed to load ML model on startup: {e}")
     yield
-    # Clean shutdown tasks if any
+    # Close MongoClient on shutdown (safe no-op if already closed via atexit).
+    close_mongo_client()
 
 
 app = FastAPI(
@@ -37,16 +62,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS configuration
+# CORS configuration — restrict to configured frontend origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:3000"
-    ],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

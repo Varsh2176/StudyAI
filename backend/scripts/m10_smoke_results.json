@@ -1,0 +1,216 @@
+{
+  "email_a": "smoke.a.1791882968@example.edu",
+  "email_b": "smoke.b.1791882968@example.edu",
+  "results": [
+    {
+      "stage": "S1",
+      "name": "GET /health",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S1",
+      "name": "GET /health/database",
+      "status": "PASS",
+      "detail": "http=200 db=connected name=studyai"
+    },
+    {
+      "stage": "S2",
+      "name": "register Student A",
+      "status": "PASS",
+      "detail": "http=200 persistence=mongo"
+    },
+    {
+      "stage": "S2",
+      "name": "duplicate register rejected",
+      "status": "PASS",
+      "detail": "http=409"
+    },
+    {
+      "stage": "S2",
+      "name": "login correct password",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S2",
+      "name": "login wrong password",
+      "status": "PASS",
+      "detail": "http=401"
+    },
+    {
+      "stage": "S2",
+      "name": "register invalid input",
+      "status": "PASS",
+      "detail": "http=422"
+    },
+    {
+      "stage": "S2",
+      "name": "protected without token",
+      "status": "PASS",
+      "detail": "http=401"
+    },
+    {
+      "stage": "S2",
+      "name": "protected with invalid token",
+      "status": "PASS",
+      "detail": "http=401"
+    },
+    {
+      "stage": "S2",
+      "name": "GET /auth/me",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S2",
+      "name": "logout acknowledges client discard",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S2",
+      "name": "logout does NOT revoke server-side (stateless)",
+      "status": "PASS",
+      "detail": "http=200 (expected still valid until expiry)"
+    },
+    {
+      "stage": "S3",
+      "name": "save profile",
+      "status": "PASS",
+      "detail": "http=200 persistence=mongo"
+    },
+    {
+      "stage": "S3",
+      "name": "reload profile",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S4",
+      "name": "register Student B",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S4",
+      "name": "A prediction",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S4",
+      "name": "A study plan",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S4",
+      "name": "A progress session",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S4",
+      "name": "A PDF upload",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S4",
+      "name": "B GET A profile",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S4",
+      "name": "B GET A predictions",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S4",
+      "name": "B GET A study plan",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S4",
+      "name": "B GET A performance",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S4",
+      "name": "B LIST A documents via query",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S4",
+      "name": "B spoof profile email as A",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S4",
+      "name": "B GET A document metadata",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S4",
+      "name": "B upload claiming A email",
+      "status": "PASS",
+      "detail": "http=403"
+    },
+    {
+      "stage": "S5",
+      "name": "Profile reload",
+      "status": "PASS",
+      "detail": "http=200"
+    },
+    {
+      "stage": "S5",
+      "name": "ML prediction",
+      "status": "PASS",
+      "detail": "http=200 score=69.63"
+    },
+    {
+      "stage": "S5",
+      "name": "Study plan load",
+      "status": "PASS",
+      "detail": "http=200 keys=['email', 'plan', 'updated_at']"
+    },
+    {
+      "stage": "S5",
+      "name": "Progress load",
+      "status": "PASS",
+      "detail": "http=200 sessions=1"
+    },
+    {
+      "stage": "S5",
+      "name": "PDF index",
+      "status": "PASS",
+      "detail": "http=200 status=indexed"
+    },
+    {
+      "stage": "S5",
+      "name": "PDF/RAG ask",
+      "status": "PASS",
+      "detail": "http=200 mode=llm grounded=True"
+    },
+    {
+      "stage": "S5",
+      "name": "Gemini AI Tutor",
+      "status": "PASS",
+      "detail": "http=200 provider=gemini model=gemini-3.5-flash-lite"
+    },
+    {
+      "stage": "S5",
+      "name": "Flashcards generation (tutor JSON)",
+      "status": "PASS",
+      "detail": "http=200 has_cards_json=True"
+    }
+  ]
+}

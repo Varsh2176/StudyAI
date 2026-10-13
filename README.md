@@ -156,6 +156,7 @@ This prevents data leakage from final exam outcomes while delivering clear, acti
    npm run dev
    ```
 2. Open your browser at [http://localhost:5173](http://localhost:5173).
+3. Local API calls default to `http://127.0.0.1:8000`. For production builds, set `VITE_API_BASE_URL` (see `frontend/.env.example` and [DEPLOYMENT.md](./DEPLOYMENT.md)).
 
 ---
 
@@ -186,12 +187,19 @@ pre-commit install
 
 ---
 
-## 8. Deployment Guidelines
+## 8. Deployment Guidelines (M9)
 
-- **Frontend**: Deployable to Vercel, Netlify, or AWS S3 + CloudFront. Build with `npm run build` (outputs to `dist/`).
-- **Backend**: Deployable to Render, Railway, or AWS EC2 using `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-- **Database**: MongoDB Atlas cloud cluster with IP allowlisting enabled.
+Full production configuration, security limitations, and smoke-test steps: **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
+
+Summary:
+
+- **Frontend**: Build with `npm run build`. Set `VITE_API_BASE_URL` to the public API origin for split hosting (see `frontend/.env.example`). Verify with `npm run check:prod-bundle`.
+- **Backend**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` with `MONGODB_URI` and production `CORS_ORIGINS`.
+- **Database**: MongoDB Atlas with Network Access allowlisting for the backend host.
+- **Auth (M10)**: Register/login with hashed passwords and bearer access tokens. Student APIs enforce token ownership. See [DEPLOYMENT.md](./DEPLOYMENT.md) §11 for remaining risks (no refresh tokens / MFA yet).
 
 ### Secrets handling
 
-Never commit `.env` files or live credentials. Copy `.env.example` / `backend/.env.example` and fill in local values (`MONGODB_URI`, `GEMINI_API_KEY`, etc.). Keep secrets in environment variables or a private secret store only. If a real credential was ever exposed in git or chat, rotate it in the provider (e.g. Atlas DB user password, Gemini API key) and treat the old value as compromised.
+Never commit `.env` files or live credentials. Copy `.env.example` / `backend/.env.example` / `frontend/.env.example` and fill in local values. Keep secrets in environment variables or a private secret store only. If a real credential was ever exposed in git or chat, rotate it in the provider (e.g. Atlas DB user password, Gemini API key) and treat the old value as compromised.
+
+**No remote deployment is performed by default.** Choose a hosting provider and approve deployment explicitly before shipping.

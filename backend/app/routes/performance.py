@@ -3,27 +3,28 @@ M17/M18 — Progress tracking and adaptive planning routes.
 
 Sessions and quizzes persist in MongoDB only. When Mongo is unavailable,
 endpoints return 503 with a clear message (no silent in-memory success).
-All reads/writes are scoped to the student email in the request.
 
-Identity limitation: the app uses student email as the ownership key (no JWT).
-Endpoints filter strictly by that email but do not cryptographically verify identity.
+M10: ownership is the authenticated token subject. Client-supplied emails
+must match the token or the request is rejected with 403.
 """
 
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.database.mongodb import (
     quizzes_collection,
     sessions_collection,
     study_plans_collection,
 )
+from app.deps.auth import get_current_user, require_owned_email
 from app.models.schemas import AdaptPlanRequest, QuizScoreLog, StudySessionLog
 from app.services.adaptive_planning_service import (
     AdaptivePlanningError,
     adapt_plan_from_progress,
 )
+from app.services.auth_service import AuthenticatedUser
 from app.services.progress_service import (
     ProgressError,
     build_progress_summary,
@@ -62,15 +63,21 @@ def _http_from_progress_error(exc: ProgressError) -> HTTPException:
 
 
 @router.post("/session")
-def log_study_session(session: StudySessionLog):
+def log_study_session(
+    session: StudySessionLog,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
-    Create a study session progress record for the owning student email.
+    Create a study session progress record for the authenticated student.
     status: completed | partial | missed. Tracks planned vs actual minutes.
     """
     _require_sessions_collection()
+    owner = require_owned_email(session.email, current_user)
 
     try:
-        record = resolve_session_fields(session.model_dump())
+        payload = session.model_dump()
+        payload["email"] = owner
+        record = resolve_session_fields(payload)
     except ProgressError as exc:
         raise _http_from_progress_error(exc) from exc
 
@@ -98,12 +105,14 @@ def list_study_sessions(
     email: str,
     status: Optional[str] = None,
     limit: int = 50,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """List study sessions owned by the given student email."""
+    """List study sessions owned by the authenticated student."""
     _require_sessions_collection()
+    owner = require_owned_email(email, current_user)
 
     try:
-        owner = normalize_student_email(email)
+        owner = normalize_student_email(owner)
     except ProgressError as exc:
         raise _http_from_progress_error(exc) from exc
 
@@ -153,12 +162,16 @@ def list_study_sessions(
 
 
 @router.post("/quiz")
-def log_quiz_score(quiz: QuizScoreLog):
-    """Records a subject quiz score owned by the student email."""
+def log_quiz_score(
+    quiz: QuizScoreLog,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Records a subject quiz score owned by the authenticated student."""
     _require_quizzes_collection()
+    owner = require_owned_email(quiz.email, current_user)
 
     try:
-        owner = normalize_student_email(quiz.email)
+        owner = normalize_student_email(owner)
         quiz_date = validate_session_date(quiz.date)
     except ProgressError as exc:
         raise _http_from_progress_error(exc) from exc
@@ -196,17 +209,21 @@ def log_quiz_score(quiz: QuizScoreLog):
 
 
 @router.get("/{email}")
-def get_performance_summary(email: str):
+def get_performance_summary(
+    email: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
-    Aggregates student progress for the owning email only:
+    Aggregates student progress for the authenticated student only:
     - Completed / partial / missed session counts
     - Planned versus actual study hours
     - Subject-wise progress and completion rates
     """
     _require_sessions_collection()
+    owner = require_owned_email(email, current_user)
 
     try:
-        owner = normalize_student_email(email)
+        owner = normalize_student_email(owner)
     except ProgressError as exc:
         raise _http_from_progress_error(exc) from exc
 
@@ -238,7 +255,10 @@ def get_performance_summary(email: str):
 
 
 @router.post("/adapt-plan")
-def adapt_study_plan(request: AdaptPlanRequest):
+def adapt_study_plan(
+    request: AdaptPlanRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     M18: Adapt the stored study plan from M17 session progress (and quizzes).
     Reschedules unfinished work into a future horizon without exceeding daily limits.
@@ -254,9 +274,10 @@ def adapt_study_plan(request: AdaptPlanRequest):
             ),
         )
     _require_sessions_collection()
+    owner = require_owned_email(request.email, current_user)
 
     try:
-        owner = normalize_student_email(request.email)
+        owner = normalize_student_email(owner)
     except ProgressError as exc:
         raise _http_from_progress_error(exc) from exc
 
