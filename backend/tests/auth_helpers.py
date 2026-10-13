@@ -1,6 +1,8 @@
-"""Helpers for M10 auth/ownership tests (no secrets printed)."""
+"""Helpers for M10/M11 auth/ownership tests (no secrets printed)."""
 
 from __future__ import annotations
+
+from starlette.requests import Request
 
 from app.services.auth_service import AuthenticatedUser, create_access_token, hash_password
 
@@ -22,6 +24,24 @@ def hashed(password: str = "password123") -> str:
     return hash_password(password)
 
 
+def fake_request(client_host: str = "127.0.0.1") -> Request:
+    """Minimal ASGI Request for calling auth route functions in unit tests."""
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/auth/test",
+        "raw_path": b"/auth/test",
+        "query_string": b"",
+        "headers": [],
+        "client": (client_host, 12345),
+        "server": ("testserver", 80),
+    }
+    return Request(scope)
+
+
 class FakeUsersCollection:
     def __init__(self):
         self.rows = {}
@@ -41,6 +61,38 @@ class FakeUsersCollection:
             raise ValueError("duplicate")
         self.rows[email] = dict(doc)
         return type("InsertResult", (), {"inserted_id": email})()
+
+
+class FakeStudyPlansCollection:
+    def __init__(self):
+        self.rows = {}
+
+    def update_one(self, filt, update, upsert=False):
+        email = (filt or {}).get("email")
+        patch = (update or {}).get("$set") or {}
+        if email is None:
+            return
+        existing = self.rows.get(email)
+        if existing is None and upsert:
+            self.rows[email] = dict(patch)
+            return
+        if existing is not None:
+            existing.update(patch)
+
+    def find_one(self, filt, projection=None, sort=None):
+        email = (filt or {}).get("email")
+        row = self.rows.get(email)
+        if not row:
+            return None
+        data = dict(row)
+        if projection:
+            include = {k for k, v in projection.items() if v}
+            exclude = {k for k, v in projection.items() if not v}
+            if include:
+                data = {k: v for k, v in data.items() if k in include or k == "email"}
+            for k in exclude:
+                data.pop(k, None)
+        return data
 
 
 class FakeDocumentsCollection:

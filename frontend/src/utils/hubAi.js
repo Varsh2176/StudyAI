@@ -1,6 +1,7 @@
 import API, { getApiUnreachableMessage } from "../services/api";
 
-const TUTOR_TIMEOUT_MS = 45000;
+// Must exceed backend per-attempt timeout + one retry (see tutor_service defaults).
+const TUTOR_TIMEOUT_MS = 90000;
 
 export async function fetchTutorStatus() {
   const res = await API.get("/ai/tutor/status", { timeout: 8000 });

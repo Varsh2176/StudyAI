@@ -4,12 +4,16 @@ M14 — General academic AI Tutor service.
 Provider-independent interface with a Gemini REST implementation.
 This module is intentionally separate from RAG/notes grounding (M15–M16).
 It never fabricates uploaded-note citations.
+
+M11/tutor hardening: configurable timeouts and bounded retries for transient
+provider failures (timeouts / 5xx). Does not retry auth or quota errors.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -17,8 +21,12 @@ from typing import Any, Dict, List, Optional
 
 # gemini-2.5-flash returns HTTP 404 for new API keys; use a current generateContent model.
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
-DEFAULT_TIMEOUT_SECONDS = 20
+# Gemini can exceed 20s under load; keep client timeouts above this value.
+DEFAULT_TIMEOUT_SECONDS = 40
+MAX_TIMEOUT_SECONDS = 90
+DEFAULT_MAX_RETRIES = 1  # total attempts = 1 + retries
 MAX_HISTORY_MESSAGES = 20
+_RETRYABLE_HTTP_STATUS = frozenset({500, 502, 503, 504})
 DISCLAIMER = (
     "StudyWise AI Tutor provides educational explanations for learning support. "
     "Verify critical facts with your course materials and instructors. "
@@ -41,6 +49,10 @@ class TutorTimeoutError(TutorError):
 class TutorProviderError(TutorError):
     """Raised for provider HTTP/API failures (including rate limits)."""
 
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
 
 def get_tutor_api_key() -> Optional[str]:
     key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
@@ -55,9 +67,19 @@ def get_tutor_timeout_seconds() -> int:
     raw = os.getenv("TUTOR_REQUEST_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
     try:
         value = int(raw)
-        return max(5, min(value, 60))
+        return max(5, min(value, MAX_TIMEOUT_SECONDS))
     except (TypeError, ValueError):
         return DEFAULT_TIMEOUT_SECONDS
+
+
+def get_tutor_max_retries() -> int:
+    """Number of retries after the first attempt (0–2). Not used for 429/401/403/404."""
+    raw = os.getenv("TUTOR_MAX_RETRIES", str(DEFAULT_MAX_RETRIES))
+    try:
+        value = int(raw)
+        return max(0, min(value, 2))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_RETRIES
 
 
 def is_tutor_configured() -> bool:
@@ -71,6 +93,7 @@ def get_tutor_status() -> Dict[str, Any]:
         "provider": "gemini" if configured else None,
         "model": get_tutor_model() if configured else None,
         "timeout_seconds": get_tutor_timeout_seconds(),
+        "max_retries": get_tutor_max_retries(),
         "message": (
             "AI Tutor is ready."
             if configured
@@ -193,6 +216,15 @@ def _call_gemini(
             raise TutorProviderError(
                 "The AI provider rejected the API key. Check GEMINI_API_KEY in backend/.env."
             ) from http_err
+        if status == 404:
+            raise TutorProviderError(
+                "The configured AI model was not found. Check TUTOR_MODEL in backend/.env."
+            ) from http_err
+        if status in _RETRYABLE_HTTP_STATUS:
+            raise TutorProviderError(
+                f"The AI provider is temporarily unavailable (HTTP {status}). Please try again.",
+                retryable=True,
+            ) from http_err
         raise TutorProviderError(
             f"The AI provider returned an error (HTTP {status}). Please try again later."
         ) from http_err
@@ -207,18 +239,27 @@ def _call_gemini(
                 "The AI provider timed out. Please try again with a shorter question."
             ) from url_err
         raise TutorProviderError(
-            "Could not reach the AI provider. Check your internet connection and try again."
+            "Could not reach the AI provider. Check your internet connection and try again.",
+            retryable=True,
         ) from url_err
 
     candidates = payload.get("candidates") or []
     if not candidates:
-        raise TutorProviderError("The AI provider returned an empty response.")
+        raise TutorProviderError("The AI provider returned an empty response.", retryable=True)
 
     parts = candidates[0].get("content", {}).get("parts") or []
     text = "".join(str(part.get("text", "")) for part in parts).strip()
     if not text:
-        raise TutorProviderError("The AI provider returned an empty answer.")
+        raise TutorProviderError("The AI provider returned an empty answer.", retryable=True)
     return text
+
+
+def _is_retryable_tutor_error(exc: BaseException) -> bool:
+    if isinstance(exc, TutorTimeoutError):
+        return True
+    if isinstance(exc, TutorProviderError):
+        return bool(getattr(exc, "retryable", False))
+    return False
 
 
 def answer_academic_question(
@@ -233,6 +274,7 @@ def answer_academic_question(
 
     Raises TutorNotConfiguredError when credentials are missing.
     Never claims the answer came from uploaded notes.
+    Retries once by default on timeouts and transient provider errors only.
     """
     cleaned = (question or "").strip()
     if not cleaned:
@@ -248,23 +290,36 @@ def answer_academic_question(
 
     model = get_tutor_model()
     timeout_seconds = get_tutor_timeout_seconds()
+    max_retries = get_tutor_max_retries()
     history = _normalize_history(conversation_history)
     system_instruction = _build_system_instruction(subject, profile_context)
 
-    answer = _call_gemini(
-        api_key=api_key,
-        model=model,
-        system_instruction=system_instruction,
-        question=cleaned,
-        conversation_history=history,
-        timeout_seconds=timeout_seconds,
-    )
+    attempts = 1 + max_retries
+    last_error: Optional[BaseException] = None
+    for attempt in range(attempts):
+        try:
+            answer = _call_gemini(
+                api_key=api_key,
+                model=model,
+                system_instruction=system_instruction,
+                question=cleaned,
+                conversation_history=history,
+                timeout_seconds=timeout_seconds,
+            )
+            return {
+                "answer": answer,
+                "provider": "gemini",
+                "model_used": model,
+                "configured": True,
+                "profile_context_used": bool(profile_context),
+                "disclaimer": DISCLAIMER,
+            }
+        except (TutorTimeoutError, TutorProviderError) as exc:
+            last_error = exc
+            if attempt >= attempts - 1 or not _is_retryable_tutor_error(exc):
+                raise
+            # Brief backoff before a single retry; never log secrets or response bodies.
+            time.sleep(0.75 * (attempt + 1))
 
-    return {
-        "answer": answer,
-        "provider": "gemini",
-        "model_used": model,
-        "configured": True,
-        "profile_context_used": bool(profile_context),
-        "disclaimer": DISCLAIMER,
-    }
+    assert last_error is not None
+    raise last_error

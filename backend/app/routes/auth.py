@@ -1,10 +1,13 @@
 """
-M10 — Registration and login with hashed passwords + bearer access tokens.
+M10/M11 — Registration and login with hashed passwords + bearer access tokens.
+M11 adds in-process rate limiting for login/register abuse resistance.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.database.mongodb import users_collection
@@ -17,6 +20,12 @@ from app.services.auth_service import (
     normalize_email,
     validate_password_strength,
     verify_password,
+)
+from app.services.rate_limit import (
+    RateLimitExceeded,
+    client_rate_key,
+    get_auth_rate_limiter,
+    rate_limit_headers,
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -58,8 +67,21 @@ def _public_auth_response(message: str, token_payload: dict) -> dict:
     }
 
 
+def _enforce_auth_rate_limit(request: Request, email_hint: Optional[str] = None) -> None:
+    host = request.client.host if request.client else None
+    key = client_rate_key(host, email_hint)
+    try:
+        get_auth_rate_limiter().check(key)
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=exc.message,
+            headers=rate_limit_headers(exc),
+        ) from exc
+
+
 @router.post("/register")
-def register(user: RegisterUser):
+def register(user: RegisterUser, request: Request):
     _require_users_collection()
 
     try:
@@ -70,6 +92,8 @@ def register(user: RegisterUser):
         validate_password_strength(user.password)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    _enforce_auth_rate_limit(request, email)
 
     try:
         existing = users_collection.find_one({"email": email})
@@ -114,13 +138,15 @@ def register(user: RegisterUser):
 
 
 @router.post("/login")
-def login(user: LoginUser):
+def login(user: LoginUser, request: Request):
     _require_users_collection()
 
     try:
         email = normalize_email(user.email)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    _enforce_auth_rate_limit(request, email)
 
     try:
         record = users_collection.find_one({"email": email})

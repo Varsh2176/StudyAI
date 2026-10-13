@@ -32,8 +32,25 @@ _HASH_PREFIX = "scrypt"
 DEFAULT_ACCESS_TOKEN_MINUTES = 60
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
+MIN_PRODUCTION_JWT_SECRET_LENGTH = 32
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Reject known placeholders even if an operator copies .env.example into production.
+_WEAK_JWT_SECRETS = frozenset(
+    s.lower()
+    for s in (
+        "",
+        "your_secret_key_here",
+        "replace_me_before_enabling_jwt",
+        "replace_with_a_long_random_secret",
+        "studyai-dev-only-jwt-secret-change-me",
+        "secret",
+        "changeme",
+        "change-me",
+        "jwt_secret",
+    )
+)
 
 
 class AuthError(Exception):
@@ -81,6 +98,11 @@ def validate_password_strength(password: str) -> None:
         raise ValueError("Password cannot start or end with whitespace.")
     if password.isspace():
         raise ValueError("Password cannot be blank.")
+    # Require mixed character classes without forcing special characters (usability).
+    has_letter = any(ch.isalpha() for ch in password)
+    has_digit = any(ch.isdigit() for ch in password)
+    if not has_letter or not has_digit:
+        raise ValueError("Password must include at least one letter and one number.")
 
 
 def _b64encode(raw: bytes) -> str:
@@ -138,13 +160,25 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
+def _app_env_name() -> str:
+    return (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development").strip().lower()
+
+
+def is_production_env() -> bool:
+    return _app_env_name() in {"production", "prod"}
+
+
 def get_jwt_secret() -> str:
     secret = (os.getenv("JWT_SECRET") or "").strip()
-    if secret and secret not in {"your_secret_key_here", "replace_me_before_enabling_jwt"}:
+    weak = (not secret) or (secret.lower() in _WEAK_JWT_SECRETS) or (len(secret) < 16)
+    if not weak:
+        if is_production_env() and len(secret) < MIN_PRODUCTION_JWT_SECRET_LENGTH:
+            raise AuthConfigError(
+                f"JWT_SECRET must be at least {MIN_PRODUCTION_JWT_SECRET_LENGTH} characters in production."
+            )
         return secret
     # Dev fallback — never use an empty secret. Operators must set JWT_SECRET in production.
-    env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development").strip().lower()
-    if env in {"production", "prod"}:
+    if is_production_env():
         raise AuthConfigError(
             "JWT_SECRET must be set to a strong random value in production."
         )

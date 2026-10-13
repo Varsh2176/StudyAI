@@ -26,7 +26,7 @@ from app.routes.study_plan import (
     generate_timetable_endpoint
 )
 from app.routes.ai import general_tutor_endpoint, tutor_status_endpoint
-from tests.auth_helpers import auth_user
+from tests.auth_helpers import FakeStudyPlansCollection, auth_user, fake_request
 from app.services.tutor_service import (
     answer_academic_question,
     get_tutor_status,
@@ -562,6 +562,13 @@ class TestPreservedBackendRoutes(unittest.TestCase):
 
 
 class TestStudyPlanner(unittest.TestCase):
+    def setUp(self):
+        # M11: plan generate requires durable Mongo write — use an in-memory fake.
+        self._plans = FakeStudyPlansCollection()
+        self._plans_patch = patch("app.routes.study_plan.study_plans_collection", self._plans)
+        self._plans_patch.start()
+        self.addCleanup(self._plans_patch.stop)
+
     def test_subject_weights(self):
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         subjects = [
@@ -795,6 +802,12 @@ class TestStudyPlanAPI(unittest.TestCase):
     - Scheduling limits and burnout guardrails
     - Deterministic timetable reproducibility
     """
+
+    def setUp(self):
+        self._plans = FakeStudyPlansCollection()
+        self._plans_patch = patch("app.routes.study_plan.study_plans_collection", self._plans)
+        self._plans_patch.start()
+        self.addCleanup(self._plans_patch.stop)
 
     def test_study_plan_generation_success(self):
         exam_date = (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d")
@@ -1113,6 +1126,67 @@ class TestGeneralAITutorM14(unittest.TestCase):
                 self.assertEqual(result["provider"], "gemini")
                 self.assertIn("not grounded in uploaded study notes", result["disclaimer"].lower())
                 gemini_mock.assert_called_once()
+
+    def test_tutor_retries_transient_timeout_then_succeeds(self):
+        with patch("app.services.tutor_service.get_tutor_api_key", return_value="test-key"):
+            with patch("app.services.tutor_service.get_tutor_max_retries", return_value=1):
+                with patch("app.services.tutor_service.time.sleep", return_value=None):
+                    with patch(
+                        "app.services.tutor_service._call_gemini",
+                        side_effect=[
+                            TutorTimeoutError("The AI provider timed out."),
+                            "Physical layer moves bits over a medium.",
+                        ],
+                    ) as gemini_mock:
+                        result = answer_academic_question("explain physical layer")
+                        self.assertIn("Physical layer", result["answer"])
+                        self.assertEqual(gemini_mock.call_count, 2)
+
+    def test_tutor_does_not_retry_rate_limit_errors(self):
+        with patch("app.services.tutor_service.get_tutor_api_key", return_value="test-key"):
+            with patch("app.services.tutor_service.get_tutor_max_retries", return_value=2):
+                with patch(
+                    "app.services.tutor_service._call_gemini",
+                    side_effect=TutorProviderError(
+                        "The AI provider rate limit was reached.",
+                        retryable=False,
+                    ),
+                ) as gemini_mock:
+                    with self.assertRaises(TutorProviderError):
+                        answer_academic_question("explain physical layer")
+                    gemini_mock.assert_called_once()
+
+    def test_tutor_retries_retryable_provider_error(self):
+        with patch("app.services.tutor_service.get_tutor_api_key", return_value="test-key"):
+            with patch("app.services.tutor_service.get_tutor_max_retries", return_value=1):
+                with patch("app.services.tutor_service.time.sleep", return_value=None):
+                    with patch(
+                        "app.services.tutor_service._call_gemini",
+                        side_effect=[
+                            TutorProviderError(
+                                "The AI provider is temporarily unavailable (HTTP 503).",
+                                retryable=True,
+                            ),
+                            "OSI layer 1 moves raw bits.",
+                        ],
+                    ) as gemini_mock:
+                        result = answer_academic_question("explain physical layer")
+                        self.assertIn("OSI layer 1", result["answer"])
+                        self.assertEqual(gemini_mock.call_count, 2)
+
+    def test_tutor_timeout_after_retries_exhausted(self):
+        with patch("app.services.tutor_service.get_tutor_api_key", return_value="test-key"):
+            with patch("app.services.tutor_service.get_tutor_max_retries", return_value=1):
+                with patch("app.services.tutor_service.time.sleep", return_value=None):
+                    with patch(
+                        "app.services.tutor_service._call_gemini",
+                        side_effect=TutorTimeoutError(
+                            "The AI provider timed out. Please try again with a shorter question."
+                        ),
+                    ) as gemini_mock:
+                        with self.assertRaises(TutorTimeoutError):
+                            answer_academic_question("explain physical layer")
+                        self.assertEqual(gemini_mock.call_count, 2)
 
     def test_tutor_endpoint_accepts_authenticated_user(self):
         """M10: tutor requires an authenticated student identity."""
@@ -2095,9 +2169,11 @@ class TestAuthOwnershipM10(unittest.TestCase):
 
     def test_register_hashes_password_and_returns_token(self):
         from app.routes.auth import RegisterUser
+        from tests.auth_helpers import fake_request
 
         res = self.auth_routes.register(
-            RegisterUser(name="Alice", email="alice@example.edu", password="password123")
+            RegisterUser(name="Alice", email="alice@example.edu", password="password123"),
+            request=fake_request(),
         )
         self.assertEqual(res["persistence"], "mongo")
         self.assertIn("access_token", res)
@@ -2108,19 +2184,24 @@ class TestAuthOwnershipM10(unittest.TestCase):
 
     def test_login_success_and_invalid_credentials(self):
         from app.routes.auth import LoginUser, RegisterUser
+        from tests.auth_helpers import fake_request
 
+        req = fake_request()
         self.auth_routes.register(
-            RegisterUser(name="Alice", email="alice@example.edu", password="password123")
+            RegisterUser(name="Alice", email="alice@example.edu", password="password123"),
+            request=req,
         )
         ok = self.auth_routes.login(
-            LoginUser(email="alice@example.edu", password="password123")
+            LoginUser(email="alice@example.edu", password="password123"),
+            request=fake_request("10.0.0.2"),
         )
         self.assertEqual(ok["message"], "Login successful")
         self.assertTrue(ok["access_token"])
 
         with self.assertRaises(HTTPException) as ctx:
             self.auth_routes.login(
-                LoginUser(email="alice@example.edu", password="wrong-password")
+                LoginUser(email="alice@example.edu", password="wrong-password"),
+                request=fake_request("10.0.0.3"),
             )
         self.assertEqual(ctx.exception.status_code, 401)
         self.assertIn("Invalid email or password", ctx.exception.detail)
@@ -2161,6 +2242,7 @@ class TestAuthOwnershipM10(unittest.TestCase):
 
     def test_memory_registration_disabled_when_mongo_missing(self):
         from app.routes.auth import RegisterUser
+        from tests.auth_helpers import fake_request
 
         with patch.object(self.auth_routes, "users_collection", None):
             with self.assertRaises(HTTPException) as ctx:
@@ -2169,10 +2251,118 @@ class TestAuthOwnershipM10(unittest.TestCase):
                         name="Alice",
                         email="offline@example.edu",
                         password="password123",
-                    )
+                    ),
+                    request=fake_request(),
                 )
             self.assertEqual(ctx.exception.status_code, 503)
             self.assertIn("In-memory registration is disabled", ctx.exception.detail)
+
+
+class TestSecurityHardeningM11(unittest.TestCase):
+    """M11 — rate limits, password rules, CORS production fail-closed, durable plan writes."""
+
+    def setUp(self):
+        from app.routes import auth as auth_routes
+        from app.services.rate_limit import reset_auth_rate_limiter_for_tests
+        from tests.auth_helpers import FakeUsersCollection
+
+        reset_auth_rate_limiter_for_tests()
+        self.auth_routes = auth_routes
+        self.users = FakeUsersCollection()
+        self._users_patch = patch.object(auth_routes, "users_collection", self.users)
+        self._users_patch.start()
+        self.addCleanup(self._users_patch.stop)
+        self.addCleanup(reset_auth_rate_limiter_for_tests)
+
+    def test_password_requires_letter_and_digit(self):
+        from app.services.auth_service import validate_password_strength
+
+        with self.assertRaises(ValueError):
+            validate_password_strength("abcdefgh")
+        with self.assertRaises(ValueError):
+            validate_password_strength("12345678")
+        validate_password_strength("password123")
+
+    def test_login_rate_limited_after_burst(self):
+        from app.routes.auth import LoginUser, RegisterUser
+        from app.services.rate_limit import SlidingWindowRateLimiter, reset_auth_rate_limiter_for_tests
+        import app.services.rate_limit as rl
+
+        reset_auth_rate_limiter_for_tests()
+        # Tight limit for a fast unit test.
+        rl._AUTH_LIMITER = SlidingWindowRateLimiter(max_attempts=3, window_seconds=60)
+
+        self.auth_routes.register(
+            RegisterUser(name="Alice", email="rate@example.edu", password="password123"),
+            request=fake_request("203.0.113.10"),
+        )
+
+        for _ in range(2):
+            with self.assertRaises(HTTPException) as bad:
+                self.auth_routes.login(
+                    LoginUser(email="rate@example.edu", password="wrong-password"),
+                    request=fake_request("203.0.113.10"),
+                )
+            self.assertEqual(bad.exception.status_code, 401)
+
+        with self.assertRaises(HTTPException) as limited:
+            self.auth_routes.login(
+                LoginUser(email="rate@example.edu", password="wrong-password"),
+                request=fake_request("203.0.113.10"),
+            )
+        self.assertEqual(limited.exception.status_code, 429)
+        self.assertIn("Retry-After", limited.exception.headers or {})
+
+    def test_cors_production_requires_explicit_origins(self):
+        from app.main import get_cors_origins
+
+        with patch.dict("os.environ", {"APP_ENV": "production", "CORS_ORIGINS": ""}, clear=False):
+            self.assertEqual(get_cors_origins(), [])
+
+        with patch.dict(
+            "os.environ",
+            {"APP_ENV": "production", "CORS_ORIGINS": "https://app.example.com"},
+            clear=False,
+        ):
+            self.assertEqual(get_cors_origins(), ["https://app.example.com"])
+
+        with patch.dict("os.environ", {"APP_ENV": "development", "CORS_ORIGINS": ""}, clear=False):
+            origins = get_cors_origins()
+            self.assertIn("http://localhost:5173", origins)
+
+    def test_production_rejects_weak_jwt_secret(self):
+        from app.services.auth_service import AuthConfigError, get_jwt_secret
+
+        with patch.dict(
+            "os.environ",
+            {"APP_ENV": "production", "JWT_SECRET": "replace_with_a_long_random_secret"},
+            clear=False,
+        ):
+            with self.assertRaises(AuthConfigError):
+                get_jwt_secret()
+
+    def test_study_plan_persist_failure_returns_503(self):
+        from app.routes.study_plan import generate_plan_endpoint
+
+        class _FailingPlans:
+            def update_one(self, *args, **kwargs):
+                raise RuntimeError("simulated mongo outage")
+
+        req = StudyPlanGenerateRequest(
+            email="alice@example.edu",
+            daily_study_hours=3.0,
+            preferred_start_time="09:00",
+            days_to_plan=2,
+            subjects=[
+                PlanSubject(name="Math", difficulty="High", current_score=60.0, target_score=85.0)
+            ],
+            risk_category="Low Risk",
+        )
+        with patch("app.routes.study_plan.study_plans_collection", _FailingPlans()):
+            with self.assertRaises(HTTPException) as ctx:
+                generate_plan_endpoint(req, auth_user("alice@example.edu"))
+            self.assertEqual(ctx.exception.status_code, 503)
+            self.assertIn("Could not save study plan", ctx.exception.detail)
 
 
 if __name__ == "__main__":

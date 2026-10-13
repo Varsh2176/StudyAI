@@ -20,7 +20,7 @@ from app.database.mongodb import (
 )
 
 
-# Local-development CORS defaults. Production should set CORS_ORIGINS explicitly.
+# Local-development CORS defaults. Production must set CORS_ORIGINS explicitly.
 _DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -30,16 +30,40 @@ _DEFAULT_CORS_ORIGINS = [
 ]
 
 
+def _is_production_env() -> bool:
+    env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development").strip().lower()
+    return env in {"production", "prod"}
+
+
 def get_cors_origins() -> list[str]:
     """
     Comma-separated CORS_ORIGINS from the environment, or local-dev defaults.
+
+    M11: In production/prod, CORS_ORIGINS is required. Missing or empty values
+    fail closed (empty allow-list) instead of falling back to localhost.
     Example production value: https://app.example.com,https://www.example.com
     """
     raw = (os.getenv("CORS_ORIGINS") or "").strip()
     if not raw:
+        if _is_production_env():
+            print(
+                "WARNING: APP_ENV is production but CORS_ORIGINS is unset. "
+                "Browser cross-origin requests will be denied until CORS_ORIGINS is configured."
+            )
+            return []
         return list(_DEFAULT_CORS_ORIGINS)
     origins = [part.strip() for part in raw.split(",") if part.strip()]
-    return origins or list(_DEFAULT_CORS_ORIGINS)
+    if not origins:
+        if _is_production_env():
+            return []
+        return list(_DEFAULT_CORS_ORIGINS)
+    # Reject wildcard allow-all which is incompatible with credentialed apps.
+    if any(origin == "*" for origin in origins):
+        print("WARNING: CORS_ORIGINS must not include '*'. Ignoring wildcard entry.")
+        origins = [o for o in origins if o != "*"]
+        if not origins and _is_production_env():
+            return []
+    return origins
 
 
 @asynccontextmanager

@@ -70,28 +70,58 @@ def _persist_record(record: Dict[str, Any]) -> None:
 
 
 def _find_record(document_id: str) -> Optional[Dict[str, Any]]:
-    if documents_collection is not None:
-        try:
-            record = documents_collection.find_one({"document_id": document_id}, {"_id": 0})
-            if record:
-                return record
-        except Exception:
-            pass
+    """
+    Load document metadata. Mongo is the source of truth.
+    Process-local cache is only used after a successful Mongo miss (same-process convenience).
+    Mongo errors fail closed with 503 — never pretend durable success from cache alone.
+    """
+    if documents_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document storage is unavailable because MongoDB is not connected. "
+                "Check /health/database."
+            ),
+        )
+    try:
+        record = documents_collection.find_one({"document_id": document_id}, {"_id": 0})
+    except Exception as db_err:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not load document metadata because MongoDB is unreachable. "
+                f"({type(db_err).__name__}). Check /health/database."
+            ),
+        ) from db_err
+    if record:
+        return record
     return _documents_cache.get(document_id)
 
 
 def _list_records_for_email(email: str) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    if documents_collection is not None:
-        try:
-            records = list(
-                documents_collection.find(
-                    {"email": email},
-                    {"_id": 0, "pages": 0},
-                ).sort("uploaded_at", -1)
-            )
-        except Exception:
-            records = []
+    if documents_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document storage is unavailable because MongoDB is not connected. "
+                "Check /health/database."
+            ),
+        )
+    try:
+        records = list(
+            documents_collection.find(
+                {"email": email},
+                {"_id": 0, "pages": 0},
+            ).sort("uploaded_at", -1)
+        )
+    except Exception as db_err:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not list documents because MongoDB is unreachable. "
+                f"({type(db_err).__name__}). Check /health/database."
+            ),
+        ) from db_err
     if records:
         return records
 

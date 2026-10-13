@@ -114,21 +114,34 @@ def generate_plan_endpoint(
             risk_details=risk_info
         )
 
-        # Persist plan for the authenticated student only
-        if study_plans_collection is not None:
-            try:
-                record = {
-                    "email": owner,
-                    "plan": plan,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-                study_plans_collection.update_one(
-                    {"email": owner},
-                    {"$set": record},
-                    upsert=True,
-                )
-            except Exception as db_err:
-                print(f"Non-fatal error persisting study plan: {type(db_err).__name__}")
+        # Persist plan for the authenticated student — fail closed if Mongo write fails.
+        if study_plans_collection is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Study plan storage is unavailable because MongoDB is not connected. "
+                    "Check /health/database."
+                ),
+            )
+        try:
+            record = {
+                "email": owner,
+                "plan": plan,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            study_plans_collection.update_one(
+                {"email": owner},
+                {"$set": record},
+                upsert=True,
+            )
+        except Exception as db_err:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not save study plan because MongoDB is unreachable. "
+                    f"({type(db_err).__name__}). Check /health/database."
+                ),
+            ) from db_err
 
         return plan
     except HTTPException:

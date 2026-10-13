@@ -1,8 +1,11 @@
-# StudyWise AI — Deployment Readiness (M9)
+# StudyWise AI — Deployment Readiness (M9–M11)
 
 This document covers production configuration for the **existing** StudyWise AI stack
 (React + Vite frontend, FastAPI backend, MongoDB Atlas, optional Gemini).  
 It does **not** claim a remote deployment has been performed.
+
+**M11** adds security hardening (auth rate limits, stronger password/JWT checks,
+production CORS fail-closed, honest Mongo persist failures) and a pre-deploy checklist.
 
 **Provider note:** No hosting provider is selected yet. Suitable options include:
 
@@ -38,15 +41,18 @@ Do not apply irreversible provider-specific changes without explicit approval.
 | `GEMINI_API_KEY` | Optional | Enables AI Tutor + LLM-grounded RAG answers |
 | `GOOGLE_API_KEY` | Optional | Alternate name for `GEMINI_API_KEY` |
 | `TUTOR_MODEL` | Optional | Gemini model id (default `gemini-3.5-flash-lite`) |
-| `TUTOR_REQUEST_TIMEOUT_SECONDS` | Optional | Tutor HTTP timeout (5–60, default 20) |
+| `TUTOR_REQUEST_TIMEOUT_SECONDS` | Optional | Per-attempt tutor HTTP timeout (5–90, default 40) |
+| `TUTOR_MAX_RETRIES` | Optional | Extra attempts after failure for timeouts/5xx only (0–2, default 1). Never retries 429/401/403/404. |
 | `CORS_ORIGINS` | **Yes in production** | Comma-separated frontend origins, e.g. `https://app.example.com` |
 | `PDF_STORAGE_DIR` | Optional | Local PDF bytes directory (default `storage/documents`) |
 | `PDF_UPLOAD_MAX_BYTES` | Optional | Upload size limit (default 10 MiB) |
 | `RAG_STORAGE_DIR` | Optional | Local TF-IDF index directory (default `storage/rag`) |
 | `RAG_EMBEDDING_PROVIDER` | Optional | Default `local_tfidf` |
-| `JWT_SECRET` | **Yes in production** | Signs short-lived access tokens (M10). Must be a strong random value when `APP_ENV=production` |
+| `JWT_SECRET` | **Yes in production** | Signs short-lived access tokens (M10). Must be a strong random value (≥32 chars) when `APP_ENV=production` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional | Token lifetime (default 60, clamped 5–1440) |
-| `APP_ENV` | Recommended | Set `production` on hosted backends so weak/missing `JWT_SECRET` is rejected |
+| `APP_ENV` | **Yes in production** | Set `production` so weak/missing `JWT_SECRET` is rejected and unset `CORS_ORIGINS` fails closed |
+| `AUTH_RATE_LIMIT_ATTEMPTS` | Optional | Max login/register attempts per client key (default 10, range 3–100) |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Optional | Sliding window for auth rate limit (default 60, range 10–3600) |
 
 Templates: `backend/.env.example`, root `.env.example`.
 
@@ -163,8 +169,11 @@ python -m unittest tests.test_studyai -q
 
 | Feature | If MongoDB is down |
 |---------|--------------------|
-| Registration (`POST /auth/register`) | May fall back to **process-local in-memory** storage and returns a warning (`persistence: "memory"`). Data is lost on restart. |
-| Student profile, plans, performance, documents metadata | Fail with clear errors (typically **503**). No silent durable success. |
+| Registration / login | **503** — in-memory registration is disabled (M10/M11). |
+| Student profile | **503** — no silent durable success. |
+| Study plan generate/save | **503** if the Mongo write cannot complete (M11). |
+| Prediction compute | Still returns the ML score; Mongo history logging is best-effort (does not claim a durable save). |
+| Documents metadata list/read/upload | **503** when Mongo is unavailable (M11 — no durable success from process cache alone). |
 | PDF bytes / RAG indexes | Local disk under `PDF_STORAGE_DIR` / `RAG_STORAGE_DIR` — independent of Atlas but not durable on ephemeral disks. |
 
 Unit tests do **not** prove live Atlas persistence. Operators must confirm via `/health/database` and a real register/profile write against Atlas.
@@ -174,8 +183,8 @@ Unit tests do **not** prove live Atlas persistence. Operators must confirm via `
 ## 7. CORS
 
 - **Development:** defaults allow Vite/local origins (`localhost` / `127.0.0.1` on ports 5173, 5174, 3000).
-- **Production:** set `CORS_ORIGINS` to your deployed frontend origin(s) only.
-- Wildcard `*` with credentials is not used.
+- **Production (`APP_ENV=production`):** `CORS_ORIGINS` is **required**. If unset/empty, the allow-list is empty (fail-closed).
+- Wildcard `*` entries are ignored (incompatible with credentialed apps).
 
 ---
 
@@ -183,6 +192,7 @@ Unit tests do **not** prove live Atlas persistence. Operators must confirm via `
 
 - Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in the **backend** environment.
 - Default model: `gemini-3.5-flash-lite` (override with `TUTOR_MODEL`).
+- Default per-attempt timeout: 40s with one bounded retry on timeouts / HTTP 5xx.
 - Without a key:
   - `GET /ai/tutor/status` reports `configured: false`.
   - Tutor / hub tools that need Gemini fail with a clear configuration message.
@@ -231,7 +241,7 @@ Do not commit `backend/storage/` (gitignored).
 
 ---
 
-## 11. Authentication (M10) and remaining risks
+## 11. Authentication (M10/M11) and remaining risks
 
 ### What M10 provides
 
@@ -241,6 +251,14 @@ Do not commit `backend/storage/` (gitignored).
 - Protected app routes require sign-in; expired/invalid tokens return **401** and the SPA clears the session.
 - Registration / document writes **fail with 503** when MongoDB is unavailable (no durable in-memory success path).
 
+### What M11 adds
+
+- **Auth rate limiting** on `POST /auth/register` and `POST /auth/login` (in-process sliding window; returns **429** + `Retry-After`).
+- Passwords must be ≥8 characters and include **at least one letter and one number**.
+- Production rejects placeholder / short `JWT_SECRET` values (`APP_ENV=production`).
+- Production CORS fail-closed when `CORS_ORIGINS` is unset.
+- Study-plan Mongo persist failures and document metadata Mongo outages return **503** (no silent durable success).
+
 ### Migration note
 
 Accounts created **before M10** that still have plaintext `password` fields cannot sign in. Those users must **re-register** (or an operator must create a new hashed account). Do not migrate by verifying against plaintext.
@@ -248,16 +266,17 @@ Accounts created **before M10** that still have plaintext `password` fields cann
 ### Remaining risks
 
 - Access tokens are **stateless** (logout is client-side discard; no server denylist).
+- Auth rate limits are **per process** — multi-worker hosts need a shared limiter for global accuracy.
 - No refresh-token rotation, MFA, email verification, or password-reset flow yet.
-- CORS misconfiguration can still expose the API to unwanted browser origins.
 - Gemini and Mongo secrets must stay server-side only.
-- Ephemeral disk loss of PDFs/RAG indexes.
-- No claim of rate limiting, abuse protection, or formal threat modeling.
+- Ephemeral disk loss of PDFs/RAG indexes on many PaaS free tiers.
+- Formal penetration testing / threat modeling is still out of scope.
 
 ### Pre-public checklist
 
 - [x] Authenticated sessions with hashed passwords and ownership checks (M10).
-- [ ] Set a strong production `JWT_SECRET` and `APP_ENV=production`.
+- [x] Auth rate limiting + production CORS fail-closed + stronger password/JWT checks (M11).
+- [ ] Set a strong production `JWT_SECRET` (≥32 random chars) and `APP_ENV=production`.
 - [ ] Set production `CORS_ORIGINS` to exact frontend origins.
 - [ ] Confirm Atlas IP allowlist is least-privilege.
 - [ ] Confirm `/health/database` is `connected` in the target environment.
@@ -265,19 +284,41 @@ Accounts created **before M10** that still have plaintext `password` fields cann
 - [ ] Rotate any credentials that were ever committed or shared.
 - [ ] Build frontend with the correct `VITE_API_BASE_URL`.
 - [ ] Run lint, production build, `check:prod-bundle`, and backend tests.
-- [ ] Complete manual smoke tests: register → login → profile → documents → deny cross-account access → sign out.
+- [ ] Complete manual smoke tests: register → login → profile → documents → deny cross-account access → sign out → burst-login 429.
 
 ---
 
-## 12. What M9 does / does not claim
+## 12. Hosting checklist (choose providers, then deploy later)
+
+Suggested split (adjust to your choice):
+
+| Layer | Example providers | Notes |
+|-------|-------------------|--------|
+| Frontend | Vercel / Netlify / Cloudflare Pages | Set `VITE_API_BASE_URL` at **build** time for split API hosting |
+| Backend | Render / Railway / Fly.io / VPS | Single worker unless shared PDF/RAG storage is designed |
+| Database | MongoDB Atlas | Network Access = backend egress IPs only |
+| PDF/RAG disk | Persistent volume or object storage | Required if uploads must survive redeploys |
+
+### Rollback guidance (after a future deploy)
+
+1. Keep the previous backend release artifact / container image.
+2. Re-point the host to the previous release; keep the same `MONGODB_URI` unless a migration ran (none in M11).
+3. Rebuild/republish the previous frontend `dist` if the API contract changed (M11 keeps contracts compatible).
+4. Confirm `GET /health` and `GET /health/database` after rollback.
+5. Auth tokens issued under an old `JWT_SECRET` will fail if the secret was rotated — users simply sign in again.
+
+---
+
+## 13. What M9–M11 do / do not claim
 
 | Claim | Status |
 |-------|--------|
 | Production frontend build + bundle checks | Supported (run locally) |
 | Configurable API base URL (`VITE_API_BASE_URL`) | Implemented |
-| Configurable CORS (`CORS_ORIGINS`) | Implemented |
+| Configurable CORS (`CORS_ORIGINS`) + prod fail-closed | Implemented (M11) |
+| Auth rate limiting (in-process) | Implemented (M11) |
 | Secrets via env / `.env.example` templates | Documented |
-| Remote deployment to a named host | **Not performed** in M9 |
-| Public multi-user security | **Not claimed** |
+| Remote deployment to a named host | **Not performed** |
+| Public multi-user security guarantee | **Not claimed** |
 
 Stop here until a hosting provider and deployment are explicitly approved.

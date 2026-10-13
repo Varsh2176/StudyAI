@@ -12,7 +12,8 @@ import {
 } from "../components/ui";
 
 const MAX_QUESTION_LENGTH = 2000;
-const TUTOR_TIMEOUT_MS = 25000;
+// Must exceed backend per-attempt timeout + one retry (see tutor_service defaults).
+const TUTOR_TIMEOUT_MS = 90000;
 
 const EXAMPLE_PROMPTS = [
   "Explain the difference between supervised and unsupervised learning with a simple example.",

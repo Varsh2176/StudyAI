@@ -28,6 +28,8 @@ function validateForm(form) {
     fieldErrors.password = "Enter a password.";
   } else if (password.length < 8) {
     fieldErrors.password = "Password must be at least 8 characters.";
+  } else if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    fieldErrors.password = "Password must include at least one letter and one number.";
   }
 
   return fieldErrors;
@@ -150,7 +152,7 @@ function Register() {
             label="Password"
             type="password"
             name="password"
-            placeholder="At least 8 characters"
+            placeholder="At least 8 characters, letter + number"
             value={form.password}
             onChange={handleChange}
             required
