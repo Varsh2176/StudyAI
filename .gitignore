@@ -24,3 +24,6 @@ storage/
 backend/scripts/*_results.json
 backend/scripts/m12_no_gemini_results.json
 backend/scripts/m13_e2e_results.json
+
+.vercel
+.env*
