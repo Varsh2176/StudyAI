@@ -1,8 +1,9 @@
 """
-M15 — Secure PDF upload, local file storage, and text extraction.
+M15 — Secure PDF upload, durable file storage, and text extraction.
 
-Stores PDF bytes on disk (not in MongoDB). Metadata + extracted page text
-are persisted for future M16 retrieval. No RAG/chunking/embeddings here.
+Stores PDF bytes on local disk in development, or MongoDB GridFS when
+FILE_STORAGE_BACKEND=mongo / Vercel (serverless has no durable disk).
+Metadata + extracted page text are persisted in MongoDB for RAG.
 """
 
 from __future__ import annotations
@@ -55,12 +56,15 @@ def get_max_extracted_chars() -> int:
 
 
 def get_storage_root() -> Path:
+    from app.services.object_storage_service import uses_mongo_blobs
+
     configured = os.getenv("PDF_STORAGE_DIR", "storage/documents").strip() or "storage/documents"
     root = Path(configured)
     if not root.is_absolute():
         # Resolve relative to backend/ working directory
         root = Path.cwd() / root
-    root.mkdir(parents=True, exist_ok=True)
+    if not uses_mongo_blobs():
+        root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
 
@@ -252,21 +256,60 @@ def _document_paths(email: str, document_id: str) -> Tuple[Path, Path]:
 
 
 def save_pdf_bytes(email: str, document_id: str, file_bytes: bytes) -> str:
+    from app.services.object_storage_service import (
+        ObjectStorageError,
+        blob_filename,
+        put_blob,
+        uses_mongo_blobs,
+    )
+
+    key = f"{owner_storage_key(email)}/{document_id}.pdf"
+    if uses_mongo_blobs():
+        try:
+            put_blob(
+                blob_filename("pdf", owner_storage_key(email), document_id, "file.pdf"),
+                file_bytes,
+                content_type="application/pdf",
+            )
+        except ObjectStorageError as exc:
+            raise PdfDocumentError(exc.message, status_code=exc.status_code) from exc
+        return key
+
     pdf_path, _ = _document_paths(email, document_id)
     pdf_path.write_bytes(file_bytes)
-    # Return storage key relative to storage root (never absolute path in APIs)
-    return f"{owner_storage_key(email)}/{document_id}.pdf"
+    return key
 
 
 def write_sidecar_metadata(email: str, document_id: str, record: Dict[str, Any]) -> None:
+    from app.services.object_storage_service import uses_mongo_blobs
+
+    if uses_mongo_blobs():
+        return
     _, sidecar = _document_paths(email, document_id)
     safe = {k: v for k, v in record.items() if k != "_id"}
     sidecar.write_text(json.dumps(safe, ensure_ascii=False), encoding="utf-8")
 
 
 def delete_stored_files(email: str, document_id: str) -> Dict[str, bool]:
-    pdf_path, sidecar = _document_paths(email, document_id)
+    from app.services.object_storage_service import (
+        ObjectStorageError,
+        delete_prefix,
+        uses_mongo_blobs,
+    )
+
     result = {"pdf_deleted": False, "sidecar_deleted": False}
+    if uses_mongo_blobs():
+        try:
+            owner = owner_storage_key(email)
+            pdf_gone = delete_prefix(f"pdf/{owner}/{document_id}/")
+            rag_gone = delete_prefix(f"rag/{owner}/{document_id}/")
+            result["pdf_deleted"] = pdf_gone
+            result["sidecar_deleted"] = rag_gone
+        except ObjectStorageError:
+            pass
+        return result
+
+    pdf_path, sidecar = _document_paths(email, document_id)
     try:
         if pdf_path.exists():
             pdf_path.unlink()

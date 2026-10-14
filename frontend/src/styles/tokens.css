@@ -1,20 +1,45 @@
 /**
- * StudyWise AI design tokens (--sw-* prefix).
- * Phase 1 — no font CDN/import; stack uses system fonts only.
+ * StudyWise AI design tokens (--sw-*).
+ * Light (default / :root + data-theme=light): Electric Lilac.
+ * Dark (data-theme=dark): Cosmic Navy & Cyan-Violet.
+ * <html data-theme> is always "light" | "dark" (never "system").
  */
-:root {
-  --sw-primary: #5b2bb8;
-  --sw-primary-hover: #4a1f9a;
-  --sw-primary-soft: #ede7fa;
+
+/*
+  Electric Lilac light palette (exact brand values):
+  App Background #F3F0FF | Cards #FFFFFF | Primary Text #1E1B4B
+  Brand Accent & Buttons #6D28D9 | Active & Secondary #EDE9FE
+*/
+:root,
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --sw-primary: #6d28d9;
+  --sw-primary-hover: #5b21b6;
+  --sw-primary-soft: #ede9fe;
   --sw-on-primary: #ffffff;
+  --sw-secondary: #6d28d9;
+  --sw-accent: #8b5cf6;
+  --sw-accent-soft: #ede9fe;
 
-  --sw-bg: #f4f1fb;
+  --sw-bg: #f3f0ff;
+  --sw-bg-accent: linear-gradient(160deg, #f3f0ff 0%, #ede9fe 48%, #ffffff 100%);
+  --sw-sidebar: #ffffff;
   --sw-surface: #ffffff;
-  --sw-surface-muted: #faf8ff;
-  --sw-border: #e4def3;
+  --sw-surface-muted: #ede9fe;
+  --sw-surface-elevated: #ffffff;
+  --sw-border: #ddd6fe;
+  --sw-divider: #e4e0f7;
 
-  --sw-text: #1e1b2e;
-  --sw-text-muted: #5c5875;
+  --sw-text: #1e1b4b;
+  --sw-text-muted: #5b567a;
+  --sw-text-inverse: #f3f0ff;
+
+  --sw-input-bg: #ffffff;
+  --sw-placeholder: #8b85a8;
+  --sw-disabled-bg: #ede9fe;
+  --sw-disabled-text: #9b95b3;
+  --sw-selected-bg: #ede9fe;
 
   --sw-success: #15803d;
   --sw-success-soft: #dcfce7;
@@ -25,7 +50,7 @@
   --sw-info: #1d4ed8;
   --sw-info-soft: #dbeafe;
 
-  --sw-subject-1: #7c3aed;
+  --sw-subject-1: #6d28d9;
   --sw-subject-1-soft: #ede9fe;
   --sw-subject-2: #2563eb;
   --sw-subject-2-soft: #dbeafe;
@@ -67,18 +92,90 @@
   --sw-radius-lg: 16px;
   --sw-radius-pill: 999px;
 
-  --sw-shadow-card: 0 1px 2px rgba(30, 27, 46, 0.05), 0 4px 14px rgba(91, 43, 184, 0.06);
-  --sw-shadow-hover: 0 2px 4px rgba(30, 27, 46, 0.06), 0 8px 22px rgba(91, 43, 184, 0.12);
-  --sw-focus-ring: 0 0 0 3px rgba(91, 43, 184, 0.35);
+  --sw-shadow-card: 0 1px 2px rgba(30, 27, 75, 0.05), 0 4px 14px rgba(109, 40, 217, 0.08);
+  --sw-shadow-hover: 0 2px 4px rgba(30, 27, 75, 0.06), 0 8px 22px rgba(109, 40, 217, 0.14);
+  --sw-glow: 0 0 0 transparent;
+  --sw-focus-ring: 0 0 0 3px rgba(109, 40, 217, 0.35);
   --sw-transition: 160ms ease;
 
   --sw-sidebar-width: 248px;
   --sw-header-height: 64px;
   --sw-content-max: 1200px;
+  --sw-overlay: rgba(30, 27, 75, 0.4);
+}
+
+/*
+  Cosmic Navy & Cyan-Violet dark palette (exact brand values):
+  Cosmic Abyss #0B0A1F | Nebula Violet #16143A | Cyber Slate #231F58
+  Electric Violet #6366F1 | Pale Violet-Blue #E0E7FF
+*/
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --sw-primary: #6366f1;
+  --sw-primary-hover: #818cf8;
+  --sw-primary-soft: rgba(99, 102, 241, 0.22);
+  --sw-on-primary: #e0e7ff;
+  --sw-secondary: #818cf8;
+  --sw-accent: #a5b4fc;
+  --sw-accent-soft: rgba(165, 180, 252, 0.16);
+
+  --sw-bg: #0b0a1f;
+  --sw-bg-accent: linear-gradient(165deg, #0b0a1f 0%, #16143a 52%, #231f58 100%);
+  --sw-sidebar: #16143a;
+  --sw-surface: #16143a;
+  --sw-surface-muted: #0b0a1f;
+  --sw-surface-elevated: #231f58;
+  --sw-border: rgba(99, 102, 241, 0.32);
+  --sw-divider: rgba(224, 231, 255, 0.12);
+
+  --sw-text: #e0e7ff;
+  --sw-text-muted: #a5b4fc;
+  --sw-text-inverse: #0b0a1f;
+
+  --sw-input-bg: #0b0a1f;
+  --sw-placeholder: #8b9ad4;
+  --sw-disabled-bg: #12102c;
+  --sw-disabled-text: #6b7399;
+  --sw-selected-bg: rgba(99, 102, 241, 0.28);
+
+  --sw-success: #4ade80;
+  --sw-success-soft: rgba(74, 222, 128, 0.14);
+  --sw-warning: #fbbf24;
+  --sw-warning-soft: rgba(251, 191, 36, 0.14);
+  --sw-danger: #f87171;
+  --sw-danger-soft: rgba(248, 113, 113, 0.14);
+  --sw-info: #93c5fd;
+  --sw-info-soft: rgba(147, 197, 253, 0.14);
+
+  --sw-subject-1: #818cf8;
+  --sw-subject-1-soft: rgba(129, 140, 248, 0.2);
+  --sw-subject-2: #60a5fa;
+  --sw-subject-2-soft: rgba(96, 165, 250, 0.18);
+  --sw-subject-3: #2dd4bf;
+  --sw-subject-3-soft: rgba(45, 212, 191, 0.16);
+  --sw-subject-4: #fb923c;
+  --sw-subject-4-soft: rgba(251, 146, 60, 0.16);
+  --sw-subject-5: #f472b6;
+  --sw-subject-5-soft: rgba(244, 114, 182, 0.16);
+  --sw-subject-6: #4ade80;
+  --sw-subject-6-soft: rgba(74, 222, 128, 0.14);
+  --sw-subject-7: #facc15;
+  --sw-subject-7-soft: rgba(250, 204, 21, 0.14);
+  --sw-subject-8: #a5b4fc;
+  --sw-subject-8-soft: rgba(165, 180, 252, 0.16);
+
+  --sw-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 28px rgba(11, 10, 31, 0.55);
+  --sw-shadow-hover: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 28px rgba(99, 102, 241, 0.22);
+  --sw-glow: 0 0 32px rgba(99, 102, 241, 0.22);
+  --sw-focus-ring: 0 0 0 3px rgba(99, 102, 241, 0.45);
+  --sw-overlay: rgba(11, 10, 31, 0.72);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
+  :root,
+  html[data-theme="light"],
+  html[data-theme="dark"] {
     --sw-transition: 0ms;
   }
 }

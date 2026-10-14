@@ -1,6 +1,6 @@
 # StudyWise AI: An AI-Integrated Personalized and Adaptive Study Planning System
 
-A full-stack, data-driven web application designed to help students optimize their academic performance through **machine learning-based score prediction**, **transparent academic risk assessment**, **deterministic study timetable scheduling**, **modular AI tutoring with grounded RAG over uploaded notes**, and **adaptive progress tracking**.
+A full-stack, data-driven web application designed to help students optimize their academic performance through **machine learning-based score prediction**, **transparent academic risk assessment**, **deterministic study timetable scheduling**, **Learning Hub study tools with grounded RAG over uploaded notes**, and **adaptive progress tracking**.
 
 ---
 
@@ -38,7 +38,7 @@ StudyWise AI is built with strict architectural boundaries separating ML computa
 - **ML vs. Scheduler vs. AI**:
   - **ML Model**: Evaluates tabular academic & lifestyle features to predict expected exam scores.
   - **Scheduler**: A deterministic engine that allocates study blocks (50m study / 10m break) based on subject difficulty, score deficits, and exam urgency.
-  - **RAG / AI Tutor**: Ingests student-uploaded PDF/text notes, chunks passages, retrieves relevant context using vector similarity, and synthesizes answers strictly grounded in the student's material with exact page citations.
+  - **RAG / Learning Hub generation**: Ingests student-uploaded PDF/text notes, chunks passages, retrieves relevant context using vector similarity, and synthesizes answers strictly grounded in the student's material with exact page citations. Hub tools (flashcards, summaries, etc.) share the same Gemini study-generation API.
 
 ---
 
@@ -83,7 +83,7 @@ This prevents data leakage from final exam outcomes while delivering clear, acti
 
 ---
 
-## 5. Grounded AI Tutor & Notes RAG (M14–M16)
+## 5. Notes RAG & Learning Hub generation (M14–M16)
 
 1. **Document Ingestion (M15)**: `POST /documents/upload` accepts PDF notes (size limit via `PDF_UPLOAD_MAX_BYTES`). Text is extracted with `pypdf` and owned by student email.
 2. **Indexing (M16)**: `POST /documents/{id}/index?email=...` chunks pages (default 150 words, 30-word overlap), builds a local TF-IDF index, and persists it under `RAG_STORAGE_DIR` (`storage/rag/`). Re-index is skipped when the content hash is unchanged.
@@ -156,6 +156,7 @@ This prevents data leakage from final exam outcomes while delivering clear, acti
    npm run dev
    ```
 2. Open your browser at [http://localhost:5173](http://localhost:5173).
+3. Local API calls default to `http://127.0.0.1:8000`. For production builds, set `VITE_API_BASE_URL` (see `frontend/.env.example` and [DEPLOYMENT.md](./DEPLOYMENT.md)).
 
 ---
 
@@ -175,11 +176,30 @@ Test coverage includes:
 - Out-of-scope query rejection
 - API health and model status endpoints
 
+### Optional secret scanning (developer workflow)
+
+Local [pre-commit](https://pre-commit.com/) + [gitleaks](https://github.com/gitleaks/gitleaks) is configured in `.pre-commit-config.yaml` for contributors who want push-time scanning. It is **not** an application dependency. After pinning the gitleaks `rev` tag in that file:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
 ---
 
-## 8. Deployment Guidelines
+## 8. Deployment Guidelines (M9)
 
-- **Frontend**: Deployable to Vercel, Netlify, or AWS S3 + CloudFront. Build with `npm run build` (outputs to `dist/`).
-- **Backend**: Deployable to Render, Railway, or AWS EC2 using `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-- **Database**: MongoDB Atlas cloud cluster with IP allowlisting enabled.
-- **Environment Security**: Keep `MONGODB_URI` and `GEMINI_API_KEY` in environment variables; never commit `.env` files to source control.
+Full production configuration, security limitations, and smoke-test steps: **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
+
+Summary:
+
+- **Frontend**: Build with `npm run build`. Set `VITE_API_BASE_URL` to the public API origin for split hosting (see `frontend/.env.example`). Verify with `npm run check:prod-bundle`.
+- **Backend**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` with `MONGODB_URI` and production `CORS_ORIGINS`.
+- **Database**: MongoDB Atlas with Network Access allowlisting for the backend host.
+- **Auth (M10)**: Register/login with hashed passwords and bearer access tokens. Student APIs enforce token ownership. See [DEPLOYMENT.md](./DEPLOYMENT.md) §11 for remaining risks (no refresh tokens / MFA yet).
+
+### Secrets handling
+
+Never commit `.env` files or live credentials. Copy `.env.example` / `backend/.env.example` / `frontend/.env.example` and fill in local values. Keep secrets in environment variables or a private secret store only. If a real credential was ever exposed in git or chat, rotate it in the provider (e.g. Atlas DB user password, Gemini API key) and treat the old value as compromised.
+
+**No remote deployment is performed by default.** Choose a hosting provider and approve deployment explicitly before shipping.

@@ -1,49 +1,89 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import API from "../services/api";
+import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/useAuth";
+import { getApiUnreachableMessage } from "../services/api";
+import { Button, ErrorMessage, Input } from "../components/ui";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateForm(form) {
+  const fieldErrors = {};
+  const name = form.name.trim();
+  const email = form.email.trim();
+  const password = form.password;
+
+  if (!name) {
+    fieldErrors.name = "Enter your full name.";
+  } else if (name.length < 2) {
+    fieldErrors.name = "Name must be at least 2 characters.";
+  }
+
+  if (!email) {
+    fieldErrors.email = "Enter your email address.";
+  } else if (!EMAIL_RE.test(email)) {
+    fieldErrors.email = "Enter a valid email address.";
+  }
+
+  if (!password) {
+    fieldErrors.password = "Enter a password.";
+  } else if (password.length < 8) {
+    fieldErrors.password = "Password must be at least 8 characters.";
+  } else if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    fieldErrors.password = "Password must include at least one letter and one number.";
+  }
+
+  return fieldErrors;
+}
 
 function Register() {
+  const { register } = useAuth();
   const [form, setForm] = useState({
     name: "",
     email: "",
-    password: ""
+    password: "",
   });
+  const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const navigate = useNavigate();
 
   const handleChange = (e) => {
-    setForm({
-      ...form,
-      [e.target.name]: e.target.value
-    });
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+    if (fieldErrors[name]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setSuccess("");
+
+    const nextFieldErrors = validateForm(form);
+    setFieldErrors(nextFieldErrors);
+    if (Object.keys(nextFieldErrors).length > 0) {
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const response = await API.post("/auth/register", form);
-      if (response.data.message === "User already exists") {
-        setError("A student with this email is already registered. You can proceed directly to your profile.");
-        localStorage.setItem("student_email", form.email);
-      } else {
-        const persistenceWarning =
-          response.data.persistence === "memory" || response.data.warning
-            ? ` ${response.data.warning || "Saved temporarily in memory only — not persisted to MongoDB."}`
-            : "";
-        setSuccess(`Registration successful!${persistenceWarning} Redirecting to student profile...`);
-        localStorage.setItem("student_email", form.email);
-        setTimeout(() => {
-          navigate("/profile");
-        }, response.data.persistence === "memory" ? 3200 : 1200);
-      }
+      await register({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password,
+      });
+      setSuccess("Account created. Redirecting to your profile…");
+      setTimeout(() => {
+        navigate("/profile");
+      }, 900);
     } catch (err) {
-      console.error(err);
       const detail = err.response?.data?.detail;
       const detailText = Array.isArray(detail)
         ? detail.map((d) => d.msg || JSON.stringify(d)).join(" ")
@@ -53,8 +93,8 @@ function Register() {
       setError(
         detailText ||
           (err.code === "ERR_NETWORK"
-            ? "Cannot reach the API. Confirm the backend is running on http://127.0.0.1:8000."
-            : "Failed to register. Please ensure backend is running.")
+            ? getApiUnreachableMessage()
+            : "Failed to register. Please try again.")
       );
     } finally {
       setLoading(false);
@@ -62,63 +102,82 @@ function Register() {
   };
 
   return (
-    <div className="page-container" style={{ maxWidth: "480px" }}>
-      <div className="card">
-        <h1 style={{ fontSize: "1.75rem", marginBottom: "0.5rem" }}>Student Registration</h1>
-        <p style={{ color: "var(--text-muted)", marginBottom: "1.5rem" }}>
-          Create your StudyWise AI account to generate adaptive study schedules.
-        </p>
+    <div className="sw-register">
+      <div className="sw-register-panel">
+        <header className="sw-register-header">
+          <h1 className="sw-register-card-title">Create your account</h1>
+          <p className="sw-register-card-desc">
+            Register with a unique email and password. After sign-in, StudyWise uses your
+            authenticated account to protect your profiles, documents, and progress.
+          </p>
+        </header>
 
-        {error && <div className="alert alert-danger">{error}</div>}
-        {success && <div className="alert alert-success">{success}</div>}
-
-        <form onSubmit={handleSubmit}>
-          <div className="form-group" style={{ marginBottom: "1rem" }}>
-            <label>Full Name</label>
-            <input
-              type="text"
-              name="name"
-              placeholder="e.g. Alex Johnson"
-              value={form.name}
-              onChange={handleChange}
-              required
-            />
+        {error ? <ErrorMessage message={error} /> : null}
+        {success ? (
+          <div className="sw-register-success" role="status">
+            {success}
           </div>
+        ) : null}
 
-          <div className="form-group" style={{ marginBottom: "1rem" }}>
-            <label>Email Address</label>
-            <input
-              type="email"
-              name="email"
-              placeholder="student@example.edu"
-              value={form.email}
-              onChange={handleChange}
-              required
-            />
-          </div>
+        <form className="sw-register-form" onSubmit={handleSubmit} noValidate>
+          <Input
+            id="register-name"
+            label="Full name"
+            type="text"
+            name="name"
+            placeholder="e.g. Alex Johnson"
+            value={form.name}
+            onChange={handleChange}
+            required
+            autoComplete="name"
+            error={fieldErrors.name}
+          />
 
-          <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-            <label>Password</label>
-            <input
-              type="password"
-              name="password"
-              placeholder="••••••••"
-              value={form.password}
-              onChange={handleChange}
-              required
-            />
-          </div>
+          <Input
+            id="register-email"
+            label="Email address"
+            type="email"
+            name="email"
+            placeholder="student@example.edu"
+            value={form.email}
+            onChange={handleChange}
+            required
+            autoComplete="email"
+            error={fieldErrors.email}
+            hint={fieldErrors.email ? undefined : "This becomes your signed-in account identity."}
+          />
 
-          <button type="submit" className="btn btn-primary" style={{ width: "100%" }} disabled={loading}>
-            {loading ? "Registering..." : "Register Account"}
-          </button>
+          <Input
+            id="register-password"
+            label="Password"
+            type="password"
+            name="password"
+            placeholder="At least 8 characters, letter + number"
+            value={form.password}
+            onChange={handleChange}
+            required
+            autoComplete="new-password"
+            error={fieldErrors.password}
+            hint={
+              fieldErrors.password
+                ? undefined
+                : "Stored as a secure hash on the server — never in the browser."
+            }
+          />
+
+          <Button
+            type="submit"
+            variant="primary"
+            className="sw-register-submit"
+            loading={loading}
+            disabled={loading}
+          >
+            {loading ? "Creating account…" : "Create account"}
+          </Button>
         </form>
 
-        <div style={{ marginTop: "1.5rem", fontSize: "0.9rem", color: "var(--text-muted)" }}>
-          Already registered?{" "}
-          <Link to="/profile" style={{ color: "var(--primary)", fontWeight: 600 }}>
-            Go to Student Profile →
-          </Link>
+        <div className="sw-register-footer">
+          Already registered? <Link to="/login">Sign in</Link>
         </div>
       </div>
     </div>

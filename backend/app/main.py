@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,11 +13,57 @@ from app.routes.performance import router as performance_router
 from app.routes.documents import router as documents_router
 from app.services.ml_service import load_model, get_model_metadata
 from app.database.mongodb import (
-    client,
+    close_mongo_client,
     db,
     diagnose_mongodb_connectivity,
     get_database_status_summary,
 )
+
+
+# Local-development CORS defaults. Production must set CORS_ORIGINS explicitly.
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:3000",
+]
+
+
+def _is_production_env() -> bool:
+    env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development").strip().lower()
+    return env in {"production", "prod"}
+
+
+def get_cors_origins() -> list[str]:
+    """
+    Comma-separated CORS_ORIGINS from the environment, or local-dev defaults.
+
+    M11: In production/prod, CORS_ORIGINS is required. Missing or empty values
+    fail closed (empty allow-list) instead of falling back to localhost.
+    Example production value: https://app.example.com,https://www.example.com
+    """
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if not raw:
+        if _is_production_env():
+            print(
+                "WARNING: APP_ENV is production but CORS_ORIGINS is unset. "
+                "Browser cross-origin requests will be denied until CORS_ORIGINS is configured."
+            )
+            return []
+        return list(_DEFAULT_CORS_ORIGINS)
+    origins = [part.strip() for part in raw.split(",") if part.strip()]
+    if not origins:
+        if _is_production_env():
+            return []
+        return list(_DEFAULT_CORS_ORIGINS)
+    # Reject wildcard allow-all which is incompatible with credentialed apps.
+    if any(origin == "*" for origin in origins):
+        print("WARNING: CORS_ORIGINS must not include '*'. Ignoring wildcard entry.")
+        origins = [o for o in origins if o != "*"]
+        if not origins and _is_production_env():
+            return []
+    return origins
 
 
 @asynccontextmanager
@@ -27,7 +75,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Warning: Failed to load ML model on startup: {e}")
     yield
-    # Clean shutdown tasks if any
+    # Close MongoClient on shutdown (safe no-op if already closed via atexit).
+    close_mongo_client()
 
 
 app = FastAPI(
@@ -37,16 +86,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS configuration
+# CORS configuration — restrict to configured frontend origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:3000"
-    ],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

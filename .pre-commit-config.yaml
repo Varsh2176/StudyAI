@@ -1,0 +1,10 @@
+# Developer workflow only — install with: pip install pre-commit && pre-commit install
+# Not an application runtime dependency.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    # TODO: pin latest gitleaks release tag after checking
+    # https://github.com/gitleaks/gitleaks/releases
+    # (do not guess a version; replace 'TODO_PIN_TAG' below with e.g. v8.x.x)
+    rev: TODO_PIN_TAG
+    hooks:
+      - id: gitleaks

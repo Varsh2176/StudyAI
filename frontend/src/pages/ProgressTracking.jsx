@@ -232,17 +232,34 @@ function ProgressTracking() {
       ? pva.fulfillment_percent
       : null;
 
+  const plannedBarMax = Math.max(
+    Number(pva?.planned_minutes) || 0,
+    Number(pva?.actual_minutes) || 0,
+    1
+  );
+  const plannedBarWidth =
+    pva?.planned_minutes != null
+      ? Math.round((Number(pva.planned_minutes) / plannedBarMax) * 100)
+      : null;
+  const actualBarWidth =
+    pva?.actual_minutes != null
+      ? Math.round((Number(pva.actual_minutes) / plannedBarMax) * 100)
+      : null;
+
   return (
     <div className="sw-progress-page page-container">
-      <section className="sw-progress-intro" aria-labelledby="progress-heading">
-        <h2 id="progress-heading">Progress tracking</h2>
-        <p>
-          Record completed, partial, and missed study sessions. Compare planned versus actual
-          study time and review subject-wise completion rates for your account.
-        </p>
-      </section>
+      <div className="sw-progress-hero">
+        <section className="sw-progress-intro" aria-labelledby="progress-heading">
+          <p className="sw-progress-eyebrow">Performance insights</p>
+          <h2 id="progress-heading">Progress tracking</h2>
+          <p>
+            Record completed, partial, and missed study sessions. Compare planned versus actual
+            study time and review subject-wise completion rates for your account.
+          </p>
+        </section>
+      </div>
 
-      <Card title="Load progress">
+      <Card title="Load progress" className="sw-progress-load-card">
         <form className="sw-progress-load" onSubmit={handleLoad}>
           <Input
             id="progress-email"
@@ -252,9 +269,10 @@ function ProgressTracking() {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@college.edu"
             required
+            hint="Loads metrics from /performance for this student identity."
           />
           <Button type="submit" variant="secondary" loading={loading} disabled={loading}>
-            {loading ? "Loading..." : "Load my progress"}
+            {loading ? "Loading…" : "Load my progress"}
           </Button>
         </form>
       </Card>
@@ -288,60 +306,78 @@ function ProgressTracking() {
       ) : null}
 
       {summary ? (
-        <div className="sw-progress-stats">
-          <Card title="Actual study time">
-            {actualHours !== null ? (
-              <div className="sw-progress-stat-value">
-                {actualHours}
-                <span className="sw-progress-stat-muted"> hrs</span>
+        <section className="sw-progress-overview" aria-labelledby="progress-overview-heading">
+          <h3 id="progress-overview-heading" className="sw-progress-section-heading">
+            Progress overview
+          </h3>
+          <div className="sw-progress-stats">
+            <Card title="Actual study time" className="sw-progress-stat-card">
+              {actualHours !== null ? (
+                <div className="sw-progress-stat-value">
+                  {actualHours}
+                  <span className="sw-progress-stat-muted"> hrs</span>
+                </div>
+              ) : (
+                <p className="sw-progress-stat-na">Not available</p>
+              )}
+              <div className="sw-progress-stat-muted">
+                Planned: {plannedHours !== null ? `${plannedHours} hrs` : "Not available"}
               </div>
-            ) : (
-              <p className="sw-progress-stat-na">Not available</p>
-            )}
-            <div className="sw-progress-stat-muted">
-              Planned: {plannedHours !== null ? `${plannedHours} hrs` : "Not available"}
-            </div>
-          </Card>
+            </Card>
 
-          <Card title="Sessions">
-            {totalSessions !== null ? (
-              <div className="sw-progress-stat-value">{totalSessions}</div>
-            ) : (
-              <p className="sw-progress-stat-na">Not available</p>
-            )}
-            <div className="sw-progress-stat-muted">
-              Done {sessionsCompleted !== null ? sessionsCompleted : "—"} · Partial{" "}
-              {sessionsPartial !== null ? sessionsPartial : "—"} · Missed{" "}
-              {sessionsMissed !== null ? sessionsMissed : "—"}
-            </div>
-          </Card>
+            <Card title="Sessions" className="sw-progress-stat-card">
+              {totalSessions !== null ? (
+                <div className="sw-progress-stat-value">{totalSessions}</div>
+              ) : (
+                <p className="sw-progress-stat-na">Not available</p>
+              )}
+              <div className="sw-progress-stat-muted">
+                Done {sessionsCompleted !== null ? sessionsCompleted : "—"} · Partial{" "}
+                {sessionsPartial !== null ? sessionsPartial : "—"} · Missed{" "}
+                {sessionsMissed !== null ? sessionsMissed : "—"}
+              </div>
+            </Card>
 
-          <Card title="Completion rate">
-            {completionRate !== null ? (
-              <div className="sw-progress-stat-value">{completionRate}%</div>
-            ) : (
-              <p className="sw-progress-stat-na">Not available</p>
-            )}
-            <div className="sw-progress-stat-muted">
-              Plan fulfillment: {fulfillment !== null ? `${fulfillment}%` : "Not available"}
-            </div>
-          </Card>
+            <Card title="Completion rate" className="sw-progress-stat-card">
+              {completionRate !== null ? (
+                <>
+                  <div className="sw-progress-stat-value">{completionRate}%</div>
+                  <ProgressBar
+                    value={Math.min(100, Math.max(0, Number(completionRate)))}
+                    label="Session completion rate"
+                    color={
+                      Number(completionRate) < 50
+                        ? "danger"
+                        : Number(completionRate) < 80
+                          ? "warning"
+                          : "success"
+                    }
+                  />
+                </>
+              ) : (
+                <p className="sw-progress-stat-na">Not available</p>
+              )}
+              <div className="sw-progress-stat-muted">
+                Plan fulfillment: {fulfillment !== null ? `${fulfillment}%` : "Not available"}
+              </div>
+            </Card>
 
-          <Card title="Adaptive planning">
-            <Button
-              type="button"
-              variant="primary"
-              loading={adapting}
-              disabled={adapting || !email.trim()}
-              onClick={handleAdaptPlan}
-            >
-              {adapting ? "Adapting..." : "Adapt from progress"}
-            </Button>
-            <p className="sw-progress-stat-muted" style={{ marginTop: "0.5rem" }}>
-              Uses missed/partial sessions and planned vs actual (M18)
-            </p>
-          </Card>
-        </div>
+            <Card title="Adaptive planning" className="sw-progress-stat-card sw-progress-adapt-action">
+              <Button
+                type="button"
+                variant="primary"
+                loading={adapting}
+                disabled={adapting || !email.trim()}
+                onClick={handleAdaptPlan}
+              >
+                {adapting ? "Adapting…" : "Adapt from progress"}
+              </Button>
+              <p className="sw-progress-stat-muted sw-progress-adapt-hint">
+                Uses missed/partial sessions and planned vs actual from your logged progress.
+              </p>
+            </Card>
+          </div>
+        </section>
       ) : null}
 
       {adaptResult ? (
@@ -361,7 +397,42 @@ function ProgressTracking() {
       ) : null}
 
       {summary && pva ? (
-        <Card title="Planned versus actual">
+        <Card title="Planned versus actual" className="sw-progress-pva-card">
+          <p className="sw-progress-chart-caption">
+            Minutes and hours from logged sessions compared with planned study time.
+          </p>
+          {(plannedBarWidth !== null || actualBarWidth !== null) ? (
+            <div
+              className="sw-progress-chart"
+              role="img"
+              aria-label={`Planned ${pva.planned_minutes ?? "n/a"} minutes versus actual ${pva.actual_minutes ?? "n/a"} minutes`}
+            >
+              {plannedBarWidth !== null ? (
+                <div className="sw-progress-chart-row">
+                  <span className="sw-progress-chart-label">Planned</span>
+                  <div className="sw-progress-chart-track">
+                    <div
+                      className="sw-progress-chart-fill sw-progress-chart-fill--planned"
+                      style={{ width: `${plannedBarWidth}%` }}
+                    />
+                  </div>
+                  <span className="sw-progress-chart-value">{pva.planned_minutes} min</span>
+                </div>
+              ) : null}
+              {actualBarWidth !== null ? (
+                <div className="sw-progress-chart-row">
+                  <span className="sw-progress-chart-label">Actual</span>
+                  <div className="sw-progress-chart-track">
+                    <div
+                      className="sw-progress-chart-fill sw-progress-chart-fill--actual"
+                      style={{ width: `${actualBarWidth}%` }}
+                    />
+                  </div>
+                  <span className="sw-progress-chart-value">{pva.actual_minutes} min</span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="sw-progress-pva">
             {pva.planned_minutes !== undefined && pva.planned_minutes !== null ? (
               <div className="sw-progress-pva-item">
@@ -397,7 +468,7 @@ function ProgressTracking() {
         </Card>
       ) : null}
 
-      <Card title="Subject-wise progress">
+      <Card title="Subject-wise progress" className="sw-progress-subjects-card">
         {!summary?.subject_metrics?.length ? (
           <EmptyState
             title="No subject data yet"
@@ -443,7 +514,7 @@ function ProgressTracking() {
                   ) : (
                     <p className="sw-progress-stat-muted">Completion rate not available</p>
                   )}
-                  <div className="sw-progress-stat-muted" style={{ marginTop: "0.5rem" }}>
+                  <div className="sw-progress-stat-muted sw-progress-subj-meta">
                     {subj.sessions_completed ?? 0} completed · {subj.sessions_partial ?? 0}{" "}
                     partial · {subj.sessions_missed ?? 0} missed
                   </div>
@@ -566,7 +637,7 @@ function ProgressTracking() {
               onChange={(e) => setSessionForm({ ...sessionForm, date: e.target.value })}
               required
             />
-            <Button type="submit" variant="primary" style={{ width: "100%" }}>
+            <Button type="submit" variant="primary" className="sw-progress-form-submit">
               Record study session
             </Button>
           </form>
@@ -618,7 +689,7 @@ function ProgressTracking() {
               onChange={(e) => setQuizForm({ ...quizForm, date: e.target.value })}
               required
             />
-            <Button type="submit" variant="primary" style={{ width: "100%" }}>
+            <Button type="submit" variant="primary" className="sw-progress-form-submit">
               Record quiz score
             </Button>
           </form>

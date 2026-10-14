@@ -1,5 +1,16 @@
 import { useState, useEffect } from "react";
 import API from "../services/api";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorMessage,
+  Input,
+  ProgressBar,
+  Select,
+  Skeleton,
+} from "../components/ui";
 
 function PredictScore() {
   const [form, setForm] = useState({
@@ -22,21 +33,13 @@ function PredictScore() {
     Parental_Education_Level: "College",
     Distance_from_Home: "Moderate",
     Gender: "Female",
-    email: ""
+    email: "",
   });
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [profileLoaded, setProfileLoaded] = useState(false);
-
-  useEffect(() => {
-    const savedEmail = localStorage.getItem("student_email");
-    if (savedEmail) {
-      setForm((prev) => ({ ...prev, email: savedEmail }));
-      loadProfileData(savedEmail);
-    }
-  }, []);
 
   const loadProfileData = async (emailToFetch) => {
     try {
@@ -46,10 +49,14 @@ function PredictScore() {
           ...prev,
           email: emailToFetch,
           Attendance: Number(res.data.attendance) || prev.Attendance,
-          // Convert daily study hours to estimated weekly hours (daily * 5)
-          Hours_Studied: Math.min(50, Math.max(1, Math.round((Number(res.data.study_hours) || 3) * 5))),
-          // Convert 10-point CGPA to 100-point percentage scale
-          Previous_Scores: Math.min(100, Math.max(0, Math.round((Number(res.data.previous_cgpa) || 7.5) * 10)))
+          Hours_Studied: Math.min(
+            50,
+            Math.max(1, Math.round((Number(res.data.study_hours) || 3) * 5))
+          ),
+          Previous_Scores: Math.min(
+            100,
+            Math.max(0, Math.round((Number(res.data.previous_cgpa) || 7.5) * 10))
+          ),
         }));
         setProfileLoaded(true);
       }
@@ -58,11 +65,28 @@ function PredictScore() {
     }
   };
 
+  useEffect(() => {
+    const savedEmail = localStorage.getItem("student_email");
+    if (!savedEmail) return undefined;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setForm((prev) => ({ ...prev, email: savedEmail }));
+      void loadProfileData(savedEmail);
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   const handleChange = (e) => {
     const { name, value, type } = e.target;
     setForm({
       ...form,
-      [name]: type === "number" ? Number(value) : value
+      [name]: type === "number" ? Number(value) : value,
     });
   };
 
@@ -79,7 +103,7 @@ function PredictScore() {
       console.error(err);
       setError(
         err.response?.data?.detail ||
-        "Failed to compute prediction. Make sure backend is running and model is trained."
+          "Failed to compute prediction. Make sure backend is running and model is trained."
       );
     } finally {
       setLoading(false);
@@ -92,42 +116,86 @@ function PredictScore() {
     return "badge-low";
   };
 
+  const riskBadgeVariant = (level) => {
+    const cls = getRiskBadgeClass(level);
+    if (cls === "badge-high") return "danger";
+    if (cls === "badge-medium") return "warning";
+    return "success";
+  };
+
+  const predictedScore =
+    result?.predicted_exam_score !== undefined && result?.predicted_exam_score !== null
+      ? Number(result.predicted_exam_score)
+      : null;
+  const scoreIsValid = predictedScore !== null && !Number.isNaN(predictedScore);
+  const riskLabel =
+    result?.risk_assessment?.risk_category ||
+    result?.risk_assessment?.risk_level ||
+    null;
+  const recommendedHours =
+    result?.recommended_study_hours ??
+    result?.recommended_daily_hours ??
+    result?.recommended_weekly_hours ??
+    result?.risk_assessment?.recommended_study_hours ??
+    null;
+  const recommendedHoursNum = Number(recommendedHours);
+  const showRecommendedHours =
+    recommendedHours !== null &&
+    recommendedHours !== undefined &&
+    !Number.isNaN(recommendedHoursNum);
+
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1>Predict Exam Score & Academic Risk</h1>
-        <p>
-          Evaluate expected academic outcome using the trained Ridge Regression pipeline (R² = 0.770, MAE = 0.452)
-          and inspect transparent leading risk factors.
-        </p>
+    <div className="sw-forms-page sw-predict-page page-container">
+      <div className="sw-forms-hero">
+        <section className="sw-forms-intro" aria-labelledby="predict-heading">
+          <p className="sw-forms-eyebrow">ML estimate</p>
+          <h2 id="predict-heading">Predict exam score & academic risk</h2>
+          <p>
+            Estimate expected academic outcome from study habits and context
+            using the trained Ridge Regression pipeline (R² = 0.770, MAE = 0.452),
+            then review transparent leading risk factors.
+          </p>
+        </section>
       </div>
 
-      {profileLoaded && (
-        <div className="alert alert-info" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>✓ Pre-filled study hours, attendance, and prior scores from your registered profile.</span>
-          <button
+      {profileLoaded ? (
+        <div className="sw-forms-info">
+          <span>
+            Pre-filled study hours, attendance, and prior scores from your
+            registered profile.
+          </span>
+          <Button
             type="button"
-            className="btn btn-secondary btn-sm"
+            variant="secondary"
+            size="sm"
             onClick={() => loadProfileData(form.email)}
           >
-            Re-sync Profile
-          </button>
+            Re-sync profile
+          </Button>
         </div>
-      )}
+      ) : null}
 
-      {error && <div className="alert alert-danger">{error}</div>}
+      {error ? (
+        <ErrorMessage
+          message={typeof error === "string" ? error : "Prediction failed."}
+          onRetry={!loading ? () => handleSubmit({ preventDefault() {} }) : undefined}
+          retryLabel="Retry prediction"
+        />
+      ) : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: result ? "1.1fr 0.9fr" : "1fr", gap: "2rem" }}>
-        {/* Form Card */}
-        <div className="card">
-          <h2 className="card-title">Student Performance Indicators</h2>
-
-          <form onSubmit={handleSubmit}>
-            <h3 style={{ fontSize: "1rem", color: "var(--primary)", marginTop: 0 }}>Core Quantitative Factors</h3>
-            <div className="form-grid">
-              <div className="form-group">
-                <label>Weekly Study Hours (0 - 50) *</label>
-                <input
+      <div
+        className={`sw-predict-layout${result || loading ? " sw-predict-layout--split" : ""}`}
+      >
+        <div className="sw-predict-form-col">
+          <form onSubmit={handleSubmit} className="sw-predict-form">
+            <Card title="Core quantitative factors" className="sw-forms-section">
+              <p className="sw-forms-card-desc">
+                Weekly study load, attendance, prior performance, sleep, tutoring,
+                and activity.
+              </p>
+              <div className="sw-forms-grid">
+                <Input
+                  label="Weekly study hours (0 - 50) *"
                   type="number"
                   name="Hours_Studied"
                   min="0"
@@ -136,12 +204,10 @@ function PredictScore() {
                   value={form.Hours_Studied}
                   onChange={handleChange}
                   required
+                  hint="Estimated weekly self-study hours"
                 />
-              </div>
-
-              <div className="form-group">
-                <label>Attendance Percentage (0 - 100%) *</label>
-                <input
+                <Input
+                  label="Attendance percentage (0 - 100%) *"
                   type="number"
                   name="Attendance"
                   min="0"
@@ -150,11 +216,8 @@ function PredictScore() {
                   onChange={handleChange}
                   required
                 />
-              </div>
-
-              <div className="form-group">
-                <label>Previous Exam Score (0 - 100%) *</label>
-                <input
+                <Input
+                  label="Previous exam score (0 - 100%) *"
                   type="number"
                   name="Previous_Scores"
                   min="0"
@@ -163,11 +226,8 @@ function PredictScore() {
                   onChange={handleChange}
                   required
                 />
-              </div>
-
-              <div className="form-group">
-                <label>Daily Sleep Hours (0 - 24)</label>
-                <input
+                <Input
+                  label="Daily sleep hours (0 - 24)"
                   type="number"
                   name="Sleep_Hours"
                   min="0"
@@ -177,11 +237,8 @@ function PredictScore() {
                   onChange={handleChange}
                   required
                 />
-              </div>
-
-              <div className="form-group">
-                <label>Monthly Tutoring Sessions (0 - 20)</label>
-                <input
+                <Input
+                  label="Monthly tutoring sessions (0 - 20)"
                   type="number"
                   name="Tutoring_Sessions"
                   min="0"
@@ -190,11 +247,8 @@ function PredictScore() {
                   onChange={handleChange}
                   required
                 />
-              </div>
-
-              <div className="form-group">
-                <label>Physical Activity Hours / Week</label>
-                <input
+                <Input
+                  label="Physical activity hours / week"
                   type="number"
                   name="Physical_Activity"
                   min="0"
@@ -205,170 +259,238 @@ function PredictScore() {
                   required
                 />
               </div>
-            </div>
+            </Card>
 
-            <h3 style={{ fontSize: "1rem", color: "var(--primary)", marginTop: "1rem" }}>Academic & Environmental Context</h3>
-            <div className="form-grid">
-              <div className="form-group">
-                <label>Motivation Level</label>
-                <select name="Motivation_Level" value={form.Motivation_Level} onChange={handleChange}>
+            <Card title="Academic & environmental context" className="sw-forms-section">
+              <p className="sw-forms-card-desc">
+                Motivation, teaching quality, resources, and support factors used by
+                the model.
+              </p>
+              <div className="sw-forms-grid">
+                <Select
+                  label="Motivation level"
+                  name="Motivation_Level"
+                  value={form.Motivation_Level}
+                  onChange={handleChange}
+                >
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Teacher Quality</label>
-                <select name="Teacher_Quality" value={form.Teacher_Quality} onChange={handleChange}>
+                </Select>
+                <Select
+                  label="Teacher quality"
+                  name="Teacher_Quality"
+                  value={form.Teacher_Quality}
+                  onChange={handleChange}
+                >
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Access to Resources</label>
-                <select name="Access_to_Resources" value={form.Access_to_Resources} onChange={handleChange}>
+                </Select>
+                <Select
+                  label="Access to resources"
+                  name="Access_to_Resources"
+                  value={form.Access_to_Resources}
+                  onChange={handleChange}
+                >
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Parental Involvement</label>
-                <select name="Parental_Involvement" value={form.Parental_Involvement} onChange={handleChange}>
+                </Select>
+                <Select
+                  label="Parental involvement"
+                  name="Parental_Involvement"
+                  value={form.Parental_Involvement}
+                  onChange={handleChange}
+                >
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Peer Influence</label>
-                <select name="Peer_Influence" value={form.Peer_Influence} onChange={handleChange}>
+                </Select>
+                <Select
+                  label="Peer influence"
+                  name="Peer_Influence"
+                  value={form.Peer_Influence}
+                  onChange={handleChange}
+                >
                   <option value="Negative">Negative</option>
                   <option value="Neutral">Neutral</option>
                   <option value="Positive">Positive</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Extracurricular Activities</label>
-                <select name="Extracurricular_Activities" value={form.Extracurricular_Activities} onChange={handleChange}>
+                </Select>
+                <Select
+                  label="Extracurricular activities"
+                  name="Extracurricular_Activities"
+                  value={form.Extracurricular_Activities}
+                  onChange={handleChange}
+                >
                   <option value="No">No</option>
                   <option value="Yes">Yes</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Internet Access</label>
-                <select name="Internet_Access" value={form.Internet_Access} onChange={handleChange}>
+                </Select>
+                <Select
+                  label="Internet access"
+                  name="Internet_Access"
+                  value={form.Internet_Access}
+                  onChange={handleChange}
+                >
                   <option value="Yes">Yes</option>
                   <option value="No">No</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Learning Disabilities</label>
-                <select name="Learning_Disabilities" value={form.Learning_Disabilities} onChange={handleChange}>
+                </Select>
+                <Select
+                  label="Learning disabilities"
+                  name="Learning_Disabilities"
+                  value={form.Learning_Disabilities}
+                  onChange={handleChange}
+                >
                   <option value="No">No</option>
                   <option value="Yes">Yes</option>
-                </select>
+                </Select>
               </div>
+            </Card>
+
+            <div className="sw-forms-footer-actions sw-predict-submit-row">
+              <Button
+                type="submit"
+                variant="primary"
+                className="sw-forms-submit sw-predict-submit"
+                loading={loading}
+                disabled={loading}
+              >
+                {loading ? "Computing prediction…" : "Predict exam score"}
+              </Button>
             </div>
-
-            <button type="submit" className="btn btn-primary" style={{ width: "100%", padding: "0.85rem" }} disabled={loading}>
-              {loading ? "Computing ML Pipeline Prediction..." : "Predict Exam Score & Identify Risk"}
-            </button>
           </form>
         </div>
 
-        {/* Prediction Results Card */}
-        {result && (
-          <div>
-            <div className="card" style={{ borderTop: "4px solid var(--primary)" }}>
-              <h2 className="card-title">Prediction Outcome</h2>
-              
-              <div style={{ textAlign: "center", padding: "1.5rem 0" }}>
-                <div style={{ fontSize: "0.9rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  Expected Exam Score
-                </div>
-                <div style={{ fontSize: "3.5rem", fontWeight: 800, color: "var(--primary)", lineHeight: 1.2 }}>
-                  {result.predicted_exam_score} <span style={{ fontSize: "1.5rem", color: "var(--text-muted)" }}>/ 100</span>
-                </div>
-                <div className="progress-bar-container" style={{ maxWidth: "260px", margin: "1rem auto 0" }}>
-                  <div className="progress-bar-fill" style={{ width: `${Math.min(100, result.predicted_exam_score)}%` }}></div>
-                </div>
+        <aside className="sw-predict-results-col" aria-live="polite">
+          {loading && !result ? (
+            <div aria-busy="true" aria-label="Computing prediction">
+              <Skeleton variant="card" />
+              <Skeleton variant="block" />
+            </div>
+          ) : null}
+
+          {!loading && !result && !error ? (
+            <EmptyState
+              title="No prediction yet"
+              description="Complete the indicators and run the model to see an estimated exam score and risk assessment."
+            />
+          ) : null}
+
+          {result ? (
+            <Card title="Prediction outcome" className="sw-predict-results-card">
+              <div className="sw-predict-score">
+                <div className="sw-predict-score-label">Expected exam score</div>
+                {scoreIsValid ? (
+                  <>
+                    <div className="sw-predict-score-value">
+                      {predictedScore} <span>/ 100</span>
+                    </div>
+                    <ProgressBar
+                      value={Math.min(100, Math.max(0, predictedScore))}
+                      label="Predicted score"
+                      color="primary"
+                    />
+                  </>
+                ) : (
+                  <p className="sw-forms-note sw-forms-note--plain">
+                    Predicted score not available in this response.
+                  </p>
+                )}
               </div>
 
-              {/* Model Info Badge */}
-              <div style={{ background: "#f8fafc", padding: "1rem", borderRadius: "8px", marginBottom: "1.25rem", fontSize: "0.85rem" }}>
-                <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "0.25rem" }}>
-                  Model Pipeline: {result.model_used}
+              {result.model_used || result.metrics ? (
+                <div className="sw-predict-metrics">
+                  {result.model_used ? (
+                    <div>
+                      <strong>Model pipeline:</strong> {result.model_used}
+                    </div>
+                  ) : null}
+                  {result.metrics ? (
+                    <div>
+                      Test MAE: <strong>{result.metrics?.MAE ?? "—"}</strong>
+                      {" | "}
+                      Test RMSE: <strong>{result.metrics?.RMSE ?? "—"}</strong>
+                      {" | "}
+                      Test R²: <strong>{result.metrics?.R2 ?? "—"}</strong>
+                    </div>
+                  ) : null}
                 </div>
-                <div style={{ color: "var(--text-muted)" }}>
-                  Test MAE: <strong>{result.metrics?.MAE}</strong> | Test RMSE: <strong>{result.metrics?.RMSE}</strong> | Test R²: <strong>{result.metrics?.R2}</strong>
-                </div>
-              </div>
+              ) : null}
 
-              {/* Phase E Risk Assessment */}
-              {result.risk_assessment && (
-                <div style={{ borderTop: "1px solid var(--border)", paddingTop: "1.25rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-                    <span style={{ fontWeight: 600, fontSize: "1rem" }}>Academic Risk Assessment:</span>
-                    <span className={`badge ${getRiskBadgeClass(result.risk_assessment.risk_category || result.risk_assessment.risk_level)}`}>
-                      {result.risk_assessment.risk_category || result.risk_assessment.risk_level}
-                    </span>
+              {showRecommendedHours ? (
+                <div className="sw-predict-hours">
+                  Recommended study hours (from API):{" "}
+                  <strong>{recommendedHours}</strong>
+                </div>
+              ) : null}
+
+              {result.risk_assessment ? (
+                <div className="sw-predict-risk">
+                  <div className="sw-predict-risk-head">
+                    <span className="sw-predict-risk-title">Academic risk assessment</span>
+                    {riskLabel ? (
+                      <Badge variant={riskBadgeVariant(riskLabel)}>{riskLabel}</Badge>
+                    ) : (
+                      <Badge variant="neutral">Risk not provided</Badge>
+                    )}
                   </div>
 
-                  {result.risk_assessment.concise_explanation && (
-                    <p style={{ fontSize: "0.9rem", color: "#334155", marginBottom: "0.75rem" }}>
+                  {result.risk_assessment.concise_explanation ? (
+                    <p className="sw-predict-risk-copy">
                       {result.risk_assessment.concise_explanation}
                     </p>
-                  )}
+                  ) : null}
 
                   {result.risk_assessment.relevant_indicators?.length > 0 ? (
-                    <div style={{ marginBottom: "0.75rem" }}>
-                      <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569", marginBottom: "0.35rem" }}>
-                        Identified Risk Indicators:
+                    <div>
+                      <div className="sw-predict-risk-subhead">
+                        Identified risk indicators
                       </div>
-                      <ul style={{ margin: 0, paddingLeft: "1.25rem", fontSize: "0.85rem", color: "#64748b" }}>
+                      <ul className="sw-predict-risk-list">
                         {result.risk_assessment.relevant_indicators.map((ind, i) => (
                           <li key={i}>
-                            <strong>{ind.indicator} ({ind.value})</strong>: {ind.message}
+                            <strong>
+                              {ind.indicator} ({ind.value})
+                            </strong>
+                            : {ind.message}
                           </li>
                         ))}
                       </ul>
                     </div>
                   ) : (
-                    <p style={{ fontSize: "0.85rem", color: "var(--success)", marginBottom: "0.75rem" }}>
-                      ✓ No adverse academic risk factors detected.
+                    <p className="sw-forms-note sw-forms-note--ok">
+                      No adverse academic risk factors detected.
                     </p>
                   )}
 
-                  {result.risk_assessment.recommended_interventions?.length > 0 && (
-                    <div style={{ background: "var(--primary-light)", padding: "0.85rem", borderRadius: "6px", fontSize: "0.85rem", color: "#312e81", marginBottom: "0.75rem" }}>
-                      <strong>Intervention Guidance:</strong>
-                      <ul style={{ margin: "0.35rem 0 0 0", paddingLeft: "1.2rem" }}>
-                        {result.risk_assessment.recommended_interventions.map((item, i) => (
-                          <li key={i}>{item}</li>
-                        ))}
+                  {result.risk_assessment.recommended_interventions?.length > 0 ? (
+                    <div className="sw-predict-interventions">
+                      <strong>Intervention guidance</strong>
+                      <ul>
+                        {result.risk_assessment.recommended_interventions.map(
+                          (item, i) => (
+                            <li key={i}>{item}</li>
+                          )
+                        )}
                       </ul>
                     </div>
-                  )}
+                  ) : null}
 
-                  {result.risk_assessment.disclaimer && (
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic", marginTop: "0.5rem" }}>
-                      ℹ {result.risk_assessment.disclaimer}
+                  {result.risk_assessment.disclaimer ? (
+                    <div className="sw-predict-disclaimer">
+                      {result.risk_assessment.disclaimer}
                     </div>
-                  )}
+                  ) : null}
                 </div>
-              )}
-            </div>
-          </div>
-        )}
+              ) : null}
+
+              <p className="sw-predict-estimate-note" role="note">
+                This result is an estimate from the trained model, not a guaranteed
+                exam score.
+              </p>
+            </Card>
+          ) : null}
+        </aside>
       </div>
     </div>
   );

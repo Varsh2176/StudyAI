@@ -207,6 +207,79 @@ export function IconRefresh(props) {
   );
 }
 
+export function IconHub(props) {
+  return (
+    <SvgIcon {...props}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3v3" />
+      <path d="M12 18v3" />
+      <path d="M3 12h3" />
+      <path d="M18 12h3" />
+      <path d="M5.6 5.6l2.1 2.1" />
+      <path d="M16.3 16.3l2.1 2.1" />
+      <path d="M18.4 5.6l-2.1 2.1" />
+      <path d="M7.7 16.3l-2.1 2.1" />
+    </SvgIcon>
+  );
+}
+
+export function IconFlashcards(props) {
+  return (
+    <SvgIcon {...props}>
+      <rect x="5" y="4" width="12" height="16" rx="2" />
+      <path d="M9 4v16" />
+      <path d="M17 8h2a1 1 0 0 1 1 1v11a2 2 0 0 1-2 2h-9" />
+    </SvgIcon>
+  );
+}
+
+export function IconMindMap(props) {
+  return (
+    <SvgIcon {...props}>
+      <circle cx="12" cy="12" r="2.5" />
+      <circle cx="5" cy="6" r="2" />
+      <circle cx="19" cy="6" r="2" />
+      <circle cx="5" cy="18" r="2" />
+      <circle cx="19" cy="18" r="2" />
+      <path d="M10.2 10.2L6.5 7.5" />
+      <path d="M13.8 10.2L17.5 7.5" />
+      <path d="M10.2 13.8L6.5 16.5" />
+      <path d="M13.8 13.8L17.5 16.5" />
+    </SvgIcon>
+  );
+}
+
+export function IconQuiz(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M9 9a3 3 0 1 1 4.2 2.7c-.7.3-1.2.9-1.2 1.6V14" />
+      <path d="M12 17h.01" />
+      <circle cx="12" cy="12" r="9" />
+    </SvgIcon>
+  );
+}
+
+export function IconExam(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M8 4h8a2 2 0 0 1 2 2v14l-3-2-3 2-3-2-3 2V6a2 2 0 0 1 2-2z" />
+      <path d="M9 9h6" />
+      <path d="M9 13h6" />
+    </SvgIcon>
+  );
+}
+
+export function IconSummary(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M6 4h9l3 3v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+      <path d="M14 4v4h4" />
+      <path d="M8 12h8" />
+      <path d="M8 16h6" />
+    </SvgIcon>
+  );
+}
+
 const Icons = {
   dashboard: IconDashboard,
   predict: IconPredict,
@@ -229,6 +302,12 @@ const Icons = {
   menu: IconMenu,
   close: IconClose,
   refresh: IconRefresh,
+  hub: IconHub,
+  flashcards: IconFlashcards,
+  mindmap: IconMindMap,
+  quiz: IconQuiz,
+  exam: IconExam,
+  summary: IconSummary,
 };
 
 export default Icons;

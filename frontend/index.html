@@ -3,12 +3,51 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>StudyAI</title>
+    <title>StudyWise AI</title>
+    <!--
+      FOUC guard — must mirror frontend/src/theme/theme.js:
+      storage key studyai_theme_mode; modes light|dark|system;
+      default selected mode = light; system resolves via prefers-color-scheme
+      (dark only when matches === true); data-theme is always light|dark never system.
+    -->
+    <script>
+      (function () {
+        var KEY = "studyai_theme_mode";
+        var DEFAULT_MODE = "light";
+        function systemResolved() {
+          try {
+            if (!window.matchMedia) return "light";
+            return window.matchMedia("(prefers-color-scheme: dark)").matches === true
+              ? "dark"
+              : "light";
+          } catch (e) {
+            return "light";
+          }
+        }
+        function resolve(mode) {
+          if (mode === "dark") return "dark";
+          if (mode === "light") return "light";
+          if (mode === "system") return systemResolved();
+          return DEFAULT_MODE;
+        }
+        try {
+          var mode = localStorage.getItem(KEY);
+          if (mode !== "light" && mode !== "dark" && mode !== "system") {
+            mode = DEFAULT_MODE;
+          }
+          var resolved = resolve(mode);
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+          document.documentElement.style.colorScheme = "light";
+        }
+      })();
+    </script>
   </head>
 
   <body>
     <div id="root"></div>
-
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

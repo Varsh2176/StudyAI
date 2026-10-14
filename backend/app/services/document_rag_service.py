@@ -11,6 +11,7 @@ LLM answer synthesis reuses the Gemini integration from M14 when configured.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -42,11 +43,14 @@ class DocumentRagError(Exception):
 
 
 def get_rag_root() -> Path:
+    from app.services.object_storage_service import uses_mongo_blobs
+
     configured = (os.getenv("RAG_STORAGE_DIR") or "storage/rag").strip() or "storage/rag"
     root = Path(configured)
     if not root.is_absolute():
         root = Path.cwd() / root
-    root.mkdir(parents=True, exist_ok=True)
+    if not uses_mongo_blobs():
+        root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
 
@@ -81,6 +85,71 @@ def _index_dir(email: str, document_id: str) -> Path:
     if get_rag_root() not in path.parents and path != get_rag_root():
         raise DocumentRagError("Invalid RAG storage path.", status_code=400)
     return path
+
+
+def _rag_blob_name(email: str, document_id: str, name: str) -> str:
+    from app.services.object_storage_service import blob_filename
+
+    return blob_filename("rag", owner_storage_key(email), document_id, name)
+
+
+def _mongo_index_complete(email: str, document_id: str) -> bool:
+    from app.services.object_storage_service import blob_exists
+
+    return all(
+        blob_exists(_rag_blob_name(email, document_id, name))
+        for name in ("meta.json", "chunks.json", "vectorizer.joblib", "matrix.joblib")
+    )
+
+
+def _write_mongo_index(
+    email: str,
+    document_id: str,
+    *,
+    chunks: List[Dict[str, Any]],
+    vectorizer: Any,
+    matrix: Any,
+    meta: Dict[str, Any],
+) -> None:
+    from app.services.object_storage_service import ObjectStorageError, put_blob
+
+    try:
+        vec_buf = io.BytesIO()
+        mat_buf = io.BytesIO()
+        joblib.dump(vectorizer, vec_buf)
+        joblib.dump(matrix, mat_buf)
+        put_blob(
+            _rag_blob_name(email, document_id, "chunks.json"),
+            json.dumps(chunks, ensure_ascii=False).encode("utf-8"),
+            content_type="application/json",
+        )
+        put_blob(
+            _rag_blob_name(email, document_id, "vectorizer.joblib"),
+            vec_buf.getvalue(),
+        )
+        put_blob(
+            _rag_blob_name(email, document_id, "matrix.joblib"),
+            mat_buf.getvalue(),
+        )
+        put_blob(
+            _rag_blob_name(email, document_id, "meta.json"),
+            json.dumps(meta, ensure_ascii=False).encode("utf-8"),
+            content_type="application/json",
+        )
+    except ObjectStorageError as exc:
+        raise DocumentRagError(exc.message, status_code=exc.status_code) from exc
+
+
+def _read_mongo_meta(email: str, document_id: str) -> Optional[Dict[str, Any]]:
+    from app.services.object_storage_service import get_blob
+
+    raw = get_blob(_rag_blob_name(email, document_id, "meta.json"))
+    if not raw:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None
 
 
 def compute_content_hash(pages: List[Dict[str, Any]]) -> str:
@@ -183,34 +252,47 @@ def index_document_record(record: Dict[str, Any], *, force: bool = False) -> Dic
             status_code=400,
         )
 
+    from app.services.object_storage_service import uses_mongo_blobs
+
     content_hash = compute_content_hash(pages)
+    mongo = uses_mongo_blobs()
     index_path = _index_dir(email, document_id)
     meta_path = index_path / "meta.json"
 
-    if not force and meta_path.exists():
-        try:
-            existing = json.loads(meta_path.read_text(encoding="utf-8"))
-            if (
-                existing.get("content_hash") == content_hash
-                and existing.get("status") == "indexed"
-                and (index_path / "chunks.json").exists()
+    if not force:
+        existing = None
+        files_ok = False
+        if mongo:
+            existing = _read_mongo_meta(email, document_id)
+            files_ok = bool(existing) and _mongo_index_complete(email, document_id)
+        elif meta_path.exists():
+            try:
+                existing = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = None
+            files_ok = bool(existing) and (
+                (index_path / "chunks.json").exists()
                 and (index_path / "vectorizer.joblib").exists()
                 and (index_path / "matrix.joblib").exists()
-            ):
-                return {
-                    "document_id": document_id,
-                    "status": "indexed",
-                    "rebuilt": False,
-                    "chunk_count": existing.get("chunk_count", 0),
-                    "embedding_provider": existing.get("embedding_provider"),
-                    "storage": "disk",
-                    "persistent": True,
-                    "content_hash": content_hash,
-                    "indexed_at": existing.get("indexed_at"),
-                    "message": "Index already up to date for this document content.",
-                }
-        except Exception:
-            pass
+            )
+        if (
+            existing
+            and files_ok
+            and existing.get("content_hash") == content_hash
+            and existing.get("status") == "indexed"
+        ):
+            return {
+                "document_id": document_id,
+                "status": "indexed",
+                "rebuilt": False,
+                "chunk_count": existing.get("chunk_count", 0),
+                "embedding_provider": existing.get("embedding_provider"),
+                "storage": "mongodb" if mongo else "disk",
+                "persistent": True,
+                "content_hash": content_hash,
+                "indexed_at": existing.get("indexed_at"),
+                "message": "Index already up to date for this document content.",
+            }
 
     chunks = chunk_pages_for_rag(
         pages,
@@ -232,15 +314,8 @@ def index_document_record(record: Dict[str, Any], *, force: bool = False) -> Dic
             status_code=400,
         ) from exc
 
-    index_path.mkdir(parents=True, exist_ok=True)
-    (index_path / "chunks.json").write_text(
-        json.dumps(chunks, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    joblib.dump(vectorizer, index_path / "vectorizer.joblib")
-    joblib.dump(matrix, index_path / "matrix.joblib")
-
     now = datetime.now(timezone.utc).isoformat()
+    storage_label = "mongodb" if mongo else "disk"
     meta = {
         "document_id": document_id,
         "email": email,
@@ -249,12 +324,29 @@ def index_document_record(record: Dict[str, Any], *, force: bool = False) -> Dic
         "chunk_count": len(chunks),
         "embedding_provider": provider,
         "content_hash": content_hash,
-        "storage": "disk",
+        "storage": storage_label,
         "persistent": True,
         "indexed_at": now,
         "updated_at": now,
     }
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    if mongo:
+        _write_mongo_index(
+            email,
+            document_id,
+            chunks=chunks,
+            vectorizer=vectorizer,
+            matrix=matrix,
+            meta=meta,
+        )
+    else:
+        index_path.mkdir(parents=True, exist_ok=True)
+        (index_path / "chunks.json").write_text(
+            json.dumps(chunks, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        joblib.dump(vectorizer, index_path / "vectorizer.joblib")
+        joblib.dump(matrix, index_path / "matrix.joblib")
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     return {
         "document_id": document_id,
@@ -262,7 +354,7 @@ def index_document_record(record: Dict[str, Any], *, force: bool = False) -> Dic
         "rebuilt": True,
         "chunk_count": len(chunks),
         "embedding_provider": provider,
-        "storage": "disk",
+        "storage": storage_label,
         "persistent": True,
         "content_hash": content_hash,
         "indexed_at": now,
@@ -271,6 +363,41 @@ def index_document_record(record: Dict[str, Any], *, force: bool = False) -> Dic
 
 
 def get_index_status(email: str, document_id: str) -> Dict[str, Any]:
+    from app.services.object_storage_service import uses_mongo_blobs
+
+    if uses_mongo_blobs():
+        meta = _read_mongo_meta(email, document_id)
+        if not meta:
+            return {
+                "document_id": document_id,
+                "status": "not_indexed",
+                "chunk_count": 0,
+                "persistent": False,
+                "storage": None,
+                "embedding_provider": None,
+                "message": "Document has not been indexed for RAG yet.",
+            }
+        if not _mongo_index_complete(email, document_id):
+            return {
+                "document_id": document_id,
+                "status": "incomplete",
+                "chunk_count": meta.get("chunk_count", 0),
+                "persistent": False,
+                "message": "RAG index files are incomplete. Re-index the document.",
+            }
+        return {
+            "document_id": document_id,
+            "status": meta.get("status", "indexed"),
+            "chunk_count": meta.get("chunk_count", 0),
+            "embedding_provider": meta.get("embedding_provider"),
+            "storage": meta.get("storage", "mongodb"),
+            "persistent": True,
+            "content_hash": meta.get("content_hash"),
+            "indexed_at": meta.get("indexed_at"),
+            "filename": meta.get("filename"),
+            "message": "Document is indexed for RAG.",
+        }
+
     index_path = _index_dir(email, document_id)
     meta_path = index_path / "meta.json"
     if not meta_path.exists():
@@ -323,6 +450,11 @@ def get_index_status(email: str, document_id: str) -> Dict[str, Any]:
 
 
 def delete_document_index(email: str, document_id: str) -> bool:
+    from app.services.object_storage_service import delete_prefix, uses_mongo_blobs
+
+    if uses_mongo_blobs():
+        owner = owner_storage_key(email)
+        return delete_prefix(f"rag/{owner}/{document_id}/")
     index_path = _index_dir(email, document_id)
     if index_path.exists() and index_path.is_dir():
         shutil.rmtree(index_path, ignore_errors=True)
@@ -331,6 +463,23 @@ def delete_document_index(email: str, document_id: str) -> bool:
 
 
 def _load_index(email: str, document_id: str) -> Tuple[List[Dict[str, Any]], Any, Any, Dict[str, Any]]:
+    from app.services.object_storage_service import get_blob, uses_mongo_blobs
+
+    if uses_mongo_blobs():
+        meta_raw = get_blob(_rag_blob_name(email, document_id, "meta.json"))
+        chunks_raw = get_blob(_rag_blob_name(email, document_id, "chunks.json"))
+        vec_raw = get_blob(_rag_blob_name(email, document_id, "vectorizer.joblib"))
+        mat_raw = get_blob(_rag_blob_name(email, document_id, "matrix.joblib"))
+        if not (meta_raw and chunks_raw and vec_raw and mat_raw):
+            raise DocumentRagError("Document is not indexed for RAG. Index it first.", status_code=409)
+        meta = json.loads(meta_raw.decode("utf-8"))
+        chunks = json.loads(chunks_raw.decode("utf-8"))
+        vectorizer = joblib.load(io.BytesIO(vec_raw))
+        matrix = joblib.load(io.BytesIO(mat_raw))
+        if (meta.get("email") or "").lower() != email.lower():
+            raise DocumentRagError("Document not found.", status_code=404)
+        return chunks, vectorizer, matrix, meta
+
     index_path = _index_dir(email, document_id)
     meta_path = index_path / "meta.json"
     if not meta_path.exists():

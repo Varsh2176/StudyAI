@@ -1,0 +1,12 @@
+backend/.venv
+backend/storage
+backend/scripts
+frontend/node_modules
+frontend/dist
+**/__pycache__
+**/*.pyc
+.git
+ml/src
+ml/data
+data
+docs

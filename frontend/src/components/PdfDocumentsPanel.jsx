@@ -353,12 +353,11 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
   return (
     <div className={compact ? "sw-pdf-panel sw-pdf-panel-compact" : "sw-pdf-panel"}>
       {!compact ? (
-        <div className="sw-docs-intro">
-          <h2>Study materials (PDF)</h2>
-          <p>
-            Upload PDF notes for secure storage and text extraction. Extracted text is saved for
-            note-based tutoring. Maximum size: {maxMb} MB · PDF only.
-          </p>
+        <div className="sw-pdf-workspace-banner">
+          <Badge variant="info">PDF only · Max {maxMb} MB</Badge>
+          <span className="sw-pdf-workspace-banner-text">
+            Limits come from the documents API when available.
+          </span>
         </div>
       ) : (
         <div className="sw-pdf-compact-head">
@@ -381,93 +380,99 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
         />
       ) : null}
 
-      <form onSubmit={handleUpload}>
-        {!emailProp ? (
-          <Input
-            id="pdf-email"
-            label="Student email"
-            type="email"
-            value={localEmail}
-            onChange={(e) => setLocalEmail(e.target.value)}
-            placeholder="student@example.edu"
-            required
-          />
-        ) : null}
-
-        <Input
-          id="pdf-subject"
-          label="Subject / topic tag"
-          type="text"
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-          placeholder="e.g. Database Systems"
-          maxLength={120}
-        />
-
-        <div
-          className={`sw-pdf-dropzone${dragActive ? " sw-pdf-dropzone--active" : ""}`}
-          onDragEnter={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragLeave={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-          }}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          role="button"
-          tabIndex={0}
-          aria-label="Choose a PDF file to upload"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              fileInputRef.current?.click();
-            }
-          }}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/pdf,.pdf"
-            onChange={handleFileInput}
-            style={{ display: "none" }}
-          />
-          <strong>Drag & drop a PDF here</strong>
-          <span className="sw-pdf-dropzone-hint">
-            or click to browse · PDF only · max {maxMb} MB
-          </span>
-          {selectedFile ? (
-            <span className="sw-pdf-selected">
-              Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})
-            </span>
+      <Card title="Upload PDF" className="sw-pdf-upload-card">
+        <form onSubmit={handleUpload} className="sw-pdf-upload-form">
+          {!emailProp ? (
+            <Input
+              id="pdf-email"
+              label="Student email"
+              type="email"
+              value={localEmail}
+              onChange={(e) => setLocalEmail(e.target.value)}
+              placeholder="student@example.edu"
+              required
+              hint="Documents are stored against this student identity."
+            />
           ) : null}
-        </div>
 
-        <div className="sw-pdf-upload-actions">
-          <Button
-            type="submit"
-            variant="primary"
-            loading={uploading}
-            disabled={uploading || !selectedFile}
+          <Input
+            id="pdf-subject"
+            label="Subject / topic tag"
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="e.g. Database Systems"
+            maxLength={120}
+          />
+
+          <div
+            className={`sw-pdf-dropzone${dragActive ? " sw-pdf-dropzone--active" : ""}${selectedFile ? " sw-pdf-dropzone--ready" : ""}`}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              setDragActive(false);
+            }}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            aria-label="Choose a PDF file to upload"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
           >
-            {uploading ? "Uploading & extracting..." : "Upload PDF"}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => loadDocuments(email)}
-            loading={loadingList}
-            disabled={loadingList || !email}
-          >
-            {loadingList ? "Refreshing..." : "Refresh list"}
-          </Button>
-        </div>
-      </form>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={handleFileInput}
+              className="sw-pdf-file-input"
+            />
+            <span className="sw-pdf-dropzone-icon" aria-hidden="true">
+              PDF
+            </span>
+            <strong>Drag & drop a PDF here</strong>
+            <span className="sw-pdf-dropzone-hint">
+              or click to browse · PDF only · max {maxMb} MB
+            </span>
+            {selectedFile ? (
+              <span className="sw-pdf-selected">
+                Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})
+              </span>
+            ) : null}
+          </div>
+
+          <div className="sw-pdf-upload-actions">
+            <Button
+              type="submit"
+              variant="primary"
+              loading={uploading}
+              disabled={uploading || !selectedFile}
+            >
+              {uploading ? "Uploading & extracting…" : "Upload PDF"}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => loadDocuments(email)}
+              loading={loadingList}
+              disabled={loadingList || !email}
+            >
+              {loadingList ? "Refreshing…" : "Refresh list"}
+            </Button>
+          </div>
+        </form>
+      </Card>
 
       <h3 className="sw-pdf-section-title">
         Uploaded documents {documents.length > 0 ? `(${documents.length})` : ""}
@@ -590,18 +595,20 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
         </div>
       )}
 
-      <Card title="Ask your notes (RAG)">
+      <Card title="Ask your notes (RAG)" className="sw-pdf-rag-card" id="ask-notes">
         <p className="sw-pdf-rag-hint">
           Answers are grounded in indexed PDF chunks with page citations. Without GEMINI_API_KEY,
-          the API returns a clearly labelled retrieval-only excerpt.
+          the API returns a clearly labelled retrieval-only excerpt — never a fabricated success
+          answer.
         </p>
 
-        <form onSubmit={handleAskRag}>
+        <form onSubmit={handleAskRag} className="sw-pdf-rag-form">
           <Select
             id="rag-doc"
             label="Document scope"
             value={ragDocumentId}
             onChange={(e) => setRagDocumentId(e.target.value)}
+            hint="Index a document first, then ask about it or all indexed notes."
           >
             <option value="">All indexed documents for this email</option>
             {documents.map((doc) => (
@@ -613,7 +620,7 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
 
           <Textarea
             id="rag-question"
-            label="Question"
+            label="Question about your notes"
             rows={3}
             value={ragQuestion}
             onChange={(e) => setRagQuestion(e.target.value)}
@@ -632,15 +639,16 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
           <Button
             type="submit"
             variant="primary"
+            className="sw-pdf-rag-submit"
             loading={ragAsking}
             disabled={ragAsking || !ragQuestion.trim()}
           >
-            {ragAsking ? "Searching notes..." : "Ask notes tutor"}
+            {ragAsking ? "Searching notes…" : "Ask notes tutor"}
           </Button>
         </form>
 
         {ragAnswer ? (
-          <div>
+          <div className="sw-pdf-rag-result">
             <div className="sw-pdf-rag-meta">
               Mode: <strong>{ragAnswer.mode}</strong>
               {ragAnswer.provider ? <> · Provider: {ragAnswer.provider}</> : null}
@@ -667,7 +675,7 @@ function PdfDocumentsPanel({ email: emailProp, compact = false, onDocumentsChang
                 ))}
               </ul>
             ) : (
-              <p className="sw-pdf-doc-meta" style={{ marginTop: "1rem" }}>
+              <p className="sw-pdf-doc-meta sw-pdf-no-sources">
                 No source passages were returned for this question.
               </p>
             )}

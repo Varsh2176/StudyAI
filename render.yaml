@@ -1,0 +1,41 @@
+# UNUSED. StudyWise production target is Vercel (see vercel.json and DEPLOYMENT.md).
+# Left in the tree so uncommitted work is not discarded. Do not apply this Blueprint.
+#
+# Render Blueprint sketch for StudyWise AI API (hybrid: Vercel frontend + this service).
+# Does not deploy by itself — apply in the Render dashboard or via Render Blueprint
+# after you set secret env vars. Never commit real credentials.
+#
+# Free plan: no persistent disks. PDF uploads and RAG indexes use temporary local
+# storage under /tmp/studywise and MAY DISAPPEAR after restarts, redeploys, or
+# free-tier spin-down. Re-upload and re-index materials after each cold start.
+# MongoDB Atlas still holds accounts, profiles, plans, and document metadata.
+
+services:
+  - type: web
+    name: studywise-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # Single instance: free plan + in-process rate limits / local PDF-RAG indexes.
+    numInstances: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_NAME
+        value: studyai
+      # Ephemeral container filesystem (free tier — not durable across restarts)
+      - key: PDF_STORAGE_DIR
+        value: /tmp/studywise/documents
+      - key: RAG_STORAGE_DIR
+        value: /tmp/studywise/rag
+      # Set these as secrets in the Render dashboard (do not put values in git):
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
